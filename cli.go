@@ -42,7 +42,7 @@ func (i *InitCommand) Execute(args []string) error {
 }
 
 type GetVolumeNameCommand struct {
-	GetVolumeName func() `short:"vn" long:"getvolumename" description:"Get a cluster wide unique volume name for the volume"`
+	GetVolumeName func() `short:"g" long:"getvolumename" description:"Get a cluster wide unique volume name for the volume"`
 }
 
 func (g *GetVolumeNameCommand) Execute(args []string) error {
@@ -59,7 +59,7 @@ func (g *GetVolumeNameCommand) Execute(args []string) error {
 	if err != nil {
 		response := resources.FlexVolumeResponse{
 			Status:  "Failure",
-			Message: fmt.Sprintf("Failed tocreate controller %#v", err),
+			Message: fmt.Sprintf("Failed to create controller %#v", err),
 		}
 		return utils.PrintResponse(response)
 	}
@@ -107,7 +107,12 @@ func (d *DetachCommand) Execute(args []string) error {
 	controller, err := createController(*configFile)
 
 	if err != nil {
-		panic("backend not found")
+		response := resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed to create controller in dettach %#v", err),
+			Device:  "",
+		}
+		return utils.PrintResponse(response)
 	}
 
 	detachRequest := resources.FlexVolumeDetachRequest{Name: mountDevice, Node: node}
@@ -116,7 +121,7 @@ func (d *DetachCommand) Execute(args []string) error {
 }
 
 type WaitForAttachCommand struct {
-	WaitForAttach func() `short:"a" long:"attach" description:"Attach a volume"`
+	WaitForAttach func() `short:"w" long:"waitforattach" description:"waits for a volume to get attached"`
 }
 
 func (w *WaitForAttachCommand) Execute(args []string) error {
@@ -152,32 +157,40 @@ func (w *WaitForAttachCommand) Execute(args []string) error {
 }
 
 type IsAttachedCommand struct {
-	Attach func() `short:"a" long:"attach" description:"Attach a volume"`
+	Attach func() `short:"i" long:"isattached" description:"Is volume attached"`
 }
 
 func (i *IsAttachedCommand) Execute(args []string) error {
-	attachRequest := make(map[string]string)
-	err := json.Unmarshal([]byte(args[0]), &attachRequest)
+	isAttachRequest := make(map[string]string)
+	err := json.Unmarshal([]byte(args[0]), &isAttachRequest)
 	if err != nil {
 		response := resources.FlexVolumeResponse{
 			Status:  "Failure",
-			Message: fmt.Sprintf("Failed to attach volume %#v", err),
+			Message: fmt.Sprintf("Failed to unmarshall isAttached request %#v", err),
 			Device:  "",
 		}
 		return utils.PrintResponse(response)
 	}
-	attachRequest["nodeName"] = args[1]
+	isAttachRequest["volumeName"] = args[1]
 	controller, err := createController(*configFile)
 
 	if err != nil {
 		panic(fmt.Sprintf("backend %s not found", configFile))
 	}
-	attachResponse := controller.Attach(attachRequest)
+	attachResponse, err := controller.IsAttached(isAttachRequest)
+	if err != nil {
+		response := resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed in isAttached request %#v", err),
+		}
+		return utils.PrintResponse(response)
+	}
+
 	return utils.PrintResponse(attachResponse)
 }
 
 type MountDeviceCommand struct {
-	Mount func() `short:"m" long:"mount" description:"Mount a volume Id to a path"`
+	Mount func() `short:"" long:"mountdevice" description:"Mount a device "`
 }
 
 func (m *MountDeviceCommand) Execute(args []string) error {
@@ -211,7 +224,7 @@ func (m *MountDeviceCommand) Execute(args []string) error {
 }
 
 type UnmountDeviceCommand struct {
-	Mount func() `short:"m" long:"mount" description:"Mount a volume Id to a path"`
+	Mount func() `short:"umd" long:"unmountdevice" description:"Unmount a device"`
 }
 
 func (m *UnmountDeviceCommand) Execute(args []string) error {
@@ -316,9 +329,9 @@ func main() {
 		"Init the plugin",
 		"The info command print the driver name and version.",
 		&initCommand)
-	//TODO to be enabled when the fix comes in (probably 1.7)
+
 	parser.AddCommand("getvolumename",
-		"Get Unique Volume Name",
+		"GetVolumeName",
 		"Get a cluster wide unique volume name for the volume.",
 		&getVolumeNameCommand)
 	parser.AddCommand("isattached",
@@ -343,11 +356,6 @@ func main() {
 		&attachCommand)
 	parser.AddCommand("detach",
 		"Detach Volume",
-		"Detach a Volume",
-		&detachCommand)
-
-	parser.AddCommand("waitforattach",
-		"Wait For Attach",
 		"Detach a Volume",
 		&detachCommand)
 

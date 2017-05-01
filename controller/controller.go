@@ -124,6 +124,8 @@ func (c *Controller) Attach(attachRequest map[string]string) resources.FlexVolum
 
 //GetVolumeName method gets a unique volume name cluster wide
 func (c *Controller) GetVolumeName(getVolumeNameRequest map[string]string) resources.FlexVolumeResponse {
+	c.logger.Println("controller-getvolumename-start")
+	defer c.logger.Println("controller-getvolumename-end")
 	volumeName, ok := getVolumeNameRequest["volumeName"]
 	if !ok {
 		return resources.FlexVolumeResponse{
@@ -133,19 +135,22 @@ func (c *Controller) GetVolumeName(getVolumeNameRequest map[string]string) resou
 	}
 	return resources.FlexVolumeResponse{
 		Status:     "Success",
-		Message:    "Volume already attached",
-		Device:     "",
+		Message:    "Volume Name retrieved",
 		VolumeName: volumeName,
 	}
 }
 
 //WaitForAttach: Wait for the volume to be attached on the remote node. On success, the path to the device is returned.
 func (c *Controller) WaitForAttach(waitForAttachRequest map[string]string) (resources.FlexVolumeResponse, error) {
+	c.logger.Println("controller-waitforattach-start")
+	defer c.logger.Println("controller-waitforattach-end")
 	return resources.FlexVolumeResponse{}, nil
 }
 
 //IsAttached: Check if the volume is attached on the node.
 func (c *Controller) IsAttached(isAttachedRequest map[string]string) (resources.FlexVolumeResponse, error) {
+	c.logger.Println("controller-isattached-start")
+	defer c.logger.Println("controller-isattached-end")
 	return resources.FlexVolumeResponse{Attached: false}, nil
 }
 
