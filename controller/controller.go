@@ -122,6 +122,33 @@ func (c *Controller) Attach(attachRequest map[string]string) resources.FlexVolum
 
 }
 
+//GetVolumeName method gets a unique volume name cluster wide
+func (c *Controller) GetVolumeName(getVolumeNameRequest map[string]string) resources.FlexVolumeResponse {
+	volumeName, ok := getVolumeNameRequest["volumeName"]
+	if !ok {
+		return resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: "Failed getting volumeName",
+		}
+	}
+	return resources.FlexVolumeResponse{
+		Status:     "Success",
+		Message:    "Volume already attached",
+		Device:     "",
+		VolumeName: volumeName,
+	}
+}
+
+//WaitForAttach: Wait for the volume to be attached on the remote node. On success, the path to the device is returned.
+func (c *Controller) WaitForAttach(waitForAttachRequest map[string]string) (string, error) {
+	return "", nil
+}
+
+//IsAttached: Check if the volume is attached on the node.
+func (c *Controller) IsAttached(isAttachedRequest map[string]string) (bool, error) {
+	return false, nil
+}
+
 //Detach detaches the volume/ fileset from the pod
 func (c *Controller) Detach(detachRequest resources.FlexVolumeDetachRequest) resources.FlexVolumeResponse {
 	c.logger.Println("controller-detach-start")

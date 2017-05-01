@@ -55,13 +55,7 @@ var (
 )
 
 func addDefaultingFuncs(scheme *kruntime.Scheme) error {
-	RegisterDefaults(scheme)
-	return scheme.AddDefaultingFuncs(
-		SetDefaults_KubeProxyConfiguration,
-		SetDefaults_KubeSchedulerConfiguration,
-		SetDefaults_LeaderElectionConfiguration,
-		SetDefaults_KubeletConfiguration,
-	)
+	return RegisterDefaults(scheme)
 }
 
 func SetDefaults_KubeProxyConfiguration(obj *KubeProxyConfiguration) {
@@ -157,6 +151,15 @@ func SetDefaults_KubeSchedulerConfiguration(obj *KubeSchedulerConfiguration) {
 	}
 	if obj.FailureDomains == "" {
 		obj.FailureDomains = api.DefaultFailureDomains
+	}
+	if obj.LockObjectNamespace == "" {
+		obj.LockObjectNamespace = SchedulerDefaultLockObjectNamespace
+	}
+	if obj.LockObjectName == "" {
+		obj.LockObjectName = SchedulerDefaultLockObjectName
+	}
+	if obj.PolicyConfigMapNamespace == "" {
+		obj.PolicyConfigMapNamespace = api.NamespaceSystem
 	}
 }
 
@@ -411,6 +414,9 @@ func SetDefaults_KubeletConfiguration(obj *KubeletConfiguration) {
 	}
 	if obj.EnableCRI == nil {
 		obj.EnableCRI = boolVar(true)
+	}
+	if obj.ExperimentalDockershim == nil {
+		obj.ExperimentalDockershim = boolVar(false)
 	}
 }
 

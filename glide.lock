@@ -1,5 +1,5 @@
-hash: f8359268904b9cde5cf92f442843522d7e38f51d88cf5f76bd424eb5b224f597
-updated: 2017-04-07T11:31:19.585007-07:00
+hash: b124a42596e169713a9bb08cc46b4558dcae86b6c5ac4ca1d30a1655a9789603
+updated: 2017-04-26T15:50:10.225413141-07:00
 imports:
 - name: cloud.google.com/go
   version: 3b1ae45394a234c385be014e9a488f2bb6eef821
@@ -74,7 +74,7 @@ imports:
 - name: github.com/howeyc/gopass
   version: 3ca23474a7c7203e0a0a070fd33508f6efdb9b3d
 - name: github.com/IBM/ubiquity
-  version: 643ba48d3e2222ba6a6477c8c3eddae25e585f01
+  version: 47e18063aa432501731574ee9e438d4796711675
   subpackages:
   - fakes
   - local/spectrumscale
@@ -302,13 +302,13 @@ imports:
   - tools/record
   - transport
 - name: k8s.io/kubernetes
-  version: 176eb0e509a255dd520de135cda31096f8796be5
+  version: 9c17779924ec849dc16e8fd17d121572c9b5c8ba
   subpackages:
   - pkg/util/goroutinemap
   - pkg/util/goroutinemap/exponentialbackoff
 testImports:
 - name: github.com/onsi/ginkgo
-  version: bb93381d543b0e5725244abe752214a110791d01
+  version: 67b9df7f55fe1165fd9ad49aca7754cce01a42b8
   subpackages:
   - config
   - internal/codelocation
@@ -317,6 +317,7 @@ testImports:
   - internal/leafnodes
   - internal/remote
   - internal/spec
+  - internal/spec_iterator
   - internal/specrunner
   - internal/suite
   - internal/testingtproxy

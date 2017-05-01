@@ -1,0 +1,296 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/IBM/ubiquity-k8s/volume/provision.go (40.7%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">no coverage</span>
+				<span class="cov1">low coverage</span>
+				<span class="cov2">*</span>
+				<span class="cov3">*</span>
+				<span class="cov4">*</span>
+				<span class="cov5">*</span>
+				<span class="cov6">*</span>
+				<span class="cov7">*</span>
+				<span class="cov8">*</span>
+				<span class="cov9">*</span>
+				<span class="cov10">high coverage</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package volume
+
+import (
+        "fmt"
+        "io/ioutil"
+        "log"
+        "os"
+        "path"
+        "strings"
+
+        "github.com/kubernetes-incubator/external-storage/lib/controller"
+        "github.com/IBM/ubiquity/resources"
+        "k8s.io/apimachinery/pkg/types"
+        "k8s.io/apimachinery/pkg/util/uuid"
+        "k8s.io/client-go/pkg/api/v1"
+)
+
+const (
+
+        // are we allowed to set this? else make up our own
+        annCreatedBy = "kubernetes.io/createdby"
+        createdBy    = "ubiquity-provisioner"
+
+        // Name of the file where an nfsProvisioner will store its identity
+        identityFile = "ubiquity-provisioner.identity"
+
+        // VolumeGidAnnotationKey is the key of the annotation on the PersistentVolume
+        // object that specifies a supplemental GID.
+        VolumeGidAnnotationKey = "pv.beta.kubernetes.io/gid"
+
+        // A PV annotation for the identity of the flexProvisioner that provisioned it
+        annProvisionerId = "Provisioner_Id"
+
+        podIPEnv     = "POD_IP"
+        serviceEnv   = "SERVICE_NAME"
+        namespaceEnv = "POD_NAMESPACE"
+        nodeEnv      = "NODE_NAME"
+)
+
+func NewFlexProvisioner(logger *log.Logger, ubiquityClient resources.StorageClient, configPath string) (controller.Provisioner, error) <span class="cov10" title="5">{
+        return newFlexProvisionerInternal(logger, ubiquityClient, configPath)
+}</span>
+
+func newFlexProvisionerInternal(logger *log.Logger, ubiquityClient resources.StorageClient, configPath string) (*flexProvisioner, error) <span class="cov10" title="5">{
+        var identity types.UID
+        identityPath := path.Join(configPath, identityFile)
+        if _, err := os.Stat(identityPath); os.IsNotExist(err) </span><span class="cov1" title="1">{
+                identity = uuid.NewUUID()
+                err := ioutil.WriteFile(identityPath, []byte(identity), 0600)
+                if err != nil </span><span class="cov0" title="0">{
+                        logger.Printf("Error writing identity file %s! %v", identityPath, err)
+                }</span>
+        }<span class="cov8" title="4"> else {
+                read, err := ioutil.ReadFile(identityPath)
+                if err != nil </span><span class="cov0" title="0">{
+                        logger.Printf("Error reading identity file %s! %v", configPath, err)
+                }</span>
+                <span class="cov8" title="4">identity = types.UID(strings.TrimSpace(string(read)))</span>
+        }
+        <span class="cov10" title="5">provisioner := &amp;flexProvisioner{
+                logger:         logger,
+                identity:       identity,
+                ubiquityClient: ubiquityClient,
+                podIPEnv:       podIPEnv,
+                serviceEnv:     serviceEnv,
+                namespaceEnv:   namespaceEnv,
+                nodeEnv:        nodeEnv,
+        }
+        err := provisioner.ubiquityClient.Activate()
+
+        return provisioner, err</span>
+}
+
+type flexProvisioner struct {
+        logger   *log.Logger
+        identity types.UID
+        // Whether the provisioner is running out of cluster and so cannot rely on
+        // the existence of any of the pod, service, namespace, node env variables.
+        outOfCluster bool
+
+        ubiquityClient resources.StorageClient
+
+        // Environment variables the provisioner pod needs valid values for in order to
+        // put a service cluster IP as the server of provisioned NFS PVs, passed in
+        // via downward API. If serviceEnv is set, namespaceEnv must be too.
+        podIPEnv     string
+        serviceEnv   string
+        namespaceEnv string
+        nodeEnv      string
+}
+
+// Provision creates a volume i.e. the storage asset and returns a PV object for
+// the volume.
+func (p *flexProvisioner) Provision(options controller.VolumeOptions) (*v1.PersistentVolume, error) <span class="cov4" title="2">{
+        if options.PVC == nil </span><span class="cov4" title="2">{
+                return nil, fmt.Errorf("options missing PVC %#v", options)
+        }</span>
+        <span class="cov0" title="0">capacity, exists := options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)]
+        if !exists </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("options.PVC.Spec.Resources.Requests does not contain capacity")
+        }</span>
+        <span class="cov0" title="0">fmt.Printf("PVC with capacity %d", capacity.Value())
+        capacityMB := capacity.Value() / (1024 * 1024)
+
+        volume_details, err := p.createVolume(options, capacityMB)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">annotations := make(map[string]string)
+        annotations[annCreatedBy] = createdBy
+        annotations[annProvisionerId] = "ubiquity-provisioner"
+
+        pv := &amp;v1.PersistentVolume{
+                ObjectMeta: v1.ObjectMeta{
+                        Name:        options.PVName,
+                        Labels:      map[string]string{},
+                        Annotations: annotations,
+                },
+                Spec: v1.PersistentVolumeSpec{
+                        PersistentVolumeReclaimPolicy: options.PersistentVolumeReclaimPolicy,
+                        AccessModes:                   options.PVC.Spec.AccessModes,
+                        Capacity: v1.ResourceList{
+                                v1.ResourceName(v1.ResourceStorage): options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)],
+                        },
+                        PersistentVolumeSource: v1.PersistentVolumeSource{
+                                FlexVolume: &amp;v1.FlexVolumeSource{
+                                        Driver:    "ibm/ubiquity",
+                                        FSType:    "",
+                                        SecretRef: nil,
+                                        ReadOnly:  false,
+                                        Options:   volume_details,
+                                },
+                        },
+                },
+        }
+
+        return pv, nil</span>
+}
+
+// Delete removes the directory that was created by Provision backing the given
+// PV.
+func (p *flexProvisioner) Delete(volume *v1.PersistentVolume) error <span class="cov7" title="3">{
+        if volume.Name == "" </span><span class="cov1" title="1">{
+                return fmt.Errorf("volume name cannot be empty %#v", volume)
+        }</span>
+        <span class="cov4" title="2">if volume.Spec.PersistentVolumeReclaimPolicy != v1.PersistentVolumeReclaimRetain </span><span class="cov4" title="2">{
+
+                err := p.ubiquityClient.RemoveVolume(volume.Name)
+                if err != nil </span><span class="cov1" title="1">{
+                        return err
+                }</span>
+                <span class="cov1" title="1">return nil</span>
+
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+func (p *flexProvisioner) createVolume(options controller.VolumeOptions, capacity int64) (map[string]string, error) <span class="cov0" title="0">{
+        ubiquityParams := make(map[string]interface{})
+        if capacity != 0 </span><span class="cov0" title="0">{
+                ubiquityParams["quota"] = fmt.Sprintf("%dM", capacity)
+        }</span>
+        <span class="cov0" title="0">for key, value := range options.Parameters </span><span class="cov0" title="0">{
+                ubiquityParams[key] = value
+        }</span>
+        <span class="cov0" title="0">err := p.ubiquityClient.CreateVolume(options.PVName, ubiquityParams)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("error creating volume: %v", err)
+        }</span>
+
+        <span class="cov0" title="0">volumeConfig, err := p.ubiquityClient.GetVolumeConfig(options.PVName)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("error getting volume config details: %v", err)
+        }</span>
+
+        <span class="cov0" title="0">flexVolumeConfig := make(map[string]string)
+        flexVolumeConfig["volumeName"] = options.PVName
+        for key, value := range volumeConfig </span><span class="cov0" title="0">{
+                flexVolumeConfig[key] = fmt.Sprintf("%v", value)
+        }</span>
+
+        <span class="cov0" title="0">return flexVolumeConfig, nil</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

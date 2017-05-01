@@ -220,7 +220,7 @@ func NewProxyServerDefault(config *options.ProxyServerConfig) (*ProxyServer, err
 
 	var proxier proxy.ProxyProvider
 	var servicesHandler proxyconfig.ServiceConfigHandler
-	var endpointsHandler proxyconfig.EndpointsConfigHandler
+	var endpointsEventHandler proxyconfig.EndpointsHandler
 
 	proxyMode := getProxyMode(string(config.Mode), client.Core().Nodes(), hostname, iptInterface, iptables.LinuxKernelCompatTester{})
 	if proxyMode == proxyModeIPTables {
@@ -247,7 +247,7 @@ func NewProxyServerDefault(config *options.ProxyServerConfig) (*ProxyServer, err
 		}
 		proxier = proxierIPTables
 		servicesHandler = proxierIPTables
-		endpointsHandler = proxierIPTables
+		endpointsEventHandler = proxierIPTables
 		// No turning back. Remove artifacts that might still exist from the userspace Proxier.
 		glog.V(0).Info("Tearing down userspace rules.")
 		userspace.CleanupLeftovers(iptInterface)
@@ -257,8 +257,8 @@ func NewProxyServerDefault(config *options.ProxyServerConfig) (*ProxyServer, err
 			// This is a proxy.LoadBalancer which NewProxier needs but has methods we don't need for
 			// our config.EndpointsConfigHandler.
 			loadBalancer := winuserspace.NewLoadBalancerRR()
-			// set EndpointsConfigHandler to our loadBalancer
-			endpointsHandler = loadBalancer
+			// set EndpointsHandler to our loadBalancer
+			endpointsEventHandler = loadBalancer
 			proxierUserspace, err := winuserspace.NewProxier(
 				loadBalancer,
 				net.ParseIP(config.BindAddress),
@@ -278,7 +278,7 @@ func NewProxyServerDefault(config *options.ProxyServerConfig) (*ProxyServer, err
 			// our config.EndpointsConfigHandler.
 			loadBalancer := userspace.NewLoadBalancerRR()
 			// set EndpointsConfigHandler to our loadBalancer
-			endpointsHandler = loadBalancer
+			endpointsEventHandler = loadBalancer
 			proxierUserspace, err := userspace.NewProxier(
 				loadBalancer,
 				net.ParseIP(config.BindAddress),
@@ -318,7 +318,7 @@ func NewProxyServerDefault(config *options.ProxyServerConfig) (*ProxyServer, err
 	go serviceConfig.Run(wait.NeverStop)
 
 	endpointsConfig := proxyconfig.NewEndpointsConfig(informerFactory.Core().InternalVersion().Endpoints(), config.ConfigSyncPeriod)
-	endpointsConfig.RegisterHandler(endpointsHandler)
+	endpointsConfig.RegisterEventHandler(endpointsEventHandler)
 	go endpointsConfig.Run(wait.NeverStop)
 
 	// This has to start after the calls to NewServiceConfig and NewEndpointsConfig because those

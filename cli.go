@@ -41,6 +41,25 @@ func (i *InitCommand) Execute(args []string) error {
 	return utils.PrintResponse(response)
 }
 
+type GetVolumeNameCommand struct {
+	GetVolumeName func() `short:"vn" long:"getvolumename" description:"Get a cluster wide unique volume name for the volume"`
+}
+
+func (g *GetVolumeNameCommand) Execute(args []string) error {
+	controller, err := createController(*configFile)
+	if err != nil {
+		response := resources.FlexVolumeResponse{
+			Status:     "Failure",
+			Message:    fmt.Sprintf("Failed tocreate controller %#v", err),
+			Device:     "",
+			VolumeName: "",
+		}
+		return utils.PrintResponse(response)
+	}
+	response := controller.GetVolumeName()
+	return utils.PrintResponse(response)
+}
+
 type AttachCommand struct {
 	Attach func() `short:"a" long:"attach" description:"Attach a volume"`
 }
@@ -56,6 +75,7 @@ func (a *AttachCommand) Execute(args []string) error {
 		}
 		return utils.PrintResponse(response)
 	}
+	attachRequest["nodeName"] = args[1]
 	controller, err := createController(*configFile)
 
 	if err != nil {
@@ -71,15 +91,134 @@ type DetachCommand struct {
 
 func (d *DetachCommand) Execute(args []string) error {
 	mountDevice := args[0]
+	node := args[1]
 	controller, err := createController(*configFile)
 
 	if err != nil {
 		panic("backend not found")
 	}
 
-	detachRequest := resources.FlexVolumeDetachRequest{Name: mountDevice}
+	detachRequest := resources.FlexVolumeDetachRequest{Name: mountDevice, Node: node}
 	detachResponse := controller.Detach(detachRequest)
 	return utils.PrintResponse(detachResponse)
+}
+
+type WaitForAttachCommand struct {
+	WaitForAttach func() `short:"a" long:"attach" description:"Attach a volume"`
+}
+
+func (w *WaitForAttachCommand) Execute(args []string) error {
+	waitForAttachRequest := make(map[string]string)
+	err := json.Unmarshal([]byte(args[1]), &waitForAttachRequest)
+	if err != nil {
+		response := resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed to attach volume %#v", err),
+			Device:  "",
+		}
+		return utils.PrintResponse(response)
+	}
+	waitForAttachRequest["device"] = args[0]
+	controller, err := createController(*configFile)
+
+	if err != nil {
+		panic(fmt.Sprintf("backend %s not found", configFile))
+	}
+	waitForAttachResponse := controller.WaitForAttach(waitForAttachRequest)
+	return utils.PrintResponse(waitForAttachResponse)
+}
+
+type IsAttachedCommand struct {
+	Attach func() `short:"a" long:"attach" description:"Attach a volume"`
+}
+
+func (i *IsAttachedCommand) Execute(args []string) error {
+	attachRequest := make(map[string]string)
+	err := json.Unmarshal([]byte(args[0]), &attachRequest)
+	if err != nil {
+		response := resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed to attach volume %#v", err),
+			Device:  "",
+		}
+		return utils.PrintResponse(response)
+	}
+	attachRequest["nodeName"] = args[1]
+	controller, err := createController(*configFile)
+
+	if err != nil {
+		panic(fmt.Sprintf("backend %s not found", configFile))
+	}
+	attachResponse := controller.Attach(attachRequest)
+	return utils.PrintResponse(attachResponse)
+}
+
+type MountDeviceCommand struct {
+	Mount func() `short:"m" long:"mount" description:"Mount a volume Id to a path"`
+}
+
+func (m *MountDeviceCommand) Execute(args []string) error {
+	targetMountDir := args[0]
+	mountDevice := args[1]
+	var mountOpts map[string]interface{}
+
+	err := json.Unmarshal([]byte(args[2]), &mountOpts)
+	if err != nil {
+		mountResponse := resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed to mount device %s to %s due to: %#v", mountDevice, targetMountDir, err),
+			Device:  mountDevice,
+		}
+		return utils.PrintResponse(mountResponse)
+	}
+
+	mountRequest := resources.FlexVolumeMountRequest{
+		MountPath:   targetMountDir,
+		MountDevice: mountDevice,
+		Opts:        mountOpts,
+	}
+
+	controller, err := createController(*configFile)
+
+	if err != nil {
+		panic("backend not found")
+	}
+	mountResponse := controller.Mount(mountRequest)
+	return utils.PrintResponse(mountResponse)
+}
+
+type UnmountDeviceCommand struct {
+	Mount func() `short:"m" long:"mount" description:"Mount a volume Id to a path"`
+}
+
+func (m *UnmountDeviceCommand) Execute(args []string) error {
+	targetMountDir := args[0]
+	mountDevice := args[1]
+	var mountOpts map[string]interface{}
+
+	err := json.Unmarshal([]byte(args[2]), &mountOpts)
+	if err != nil {
+		mountResponse := resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed to mount device %s to %s due to: %#v", mountDevice, targetMountDir, err),
+			Device:  mountDevice,
+		}
+		return utils.PrintResponse(mountResponse)
+	}
+
+	mountRequest := resources.FlexVolumeMountRequest{
+		MountPath:   targetMountDir,
+		MountDevice: mountDevice,
+		Opts:        mountOpts,
+	}
+
+	controller, err := createController(*configFile)
+
+	if err != nil {
+		panic("backend not found")
+	}
+	mountResponse := controller.Mount(mountRequest)
+	return utils.PrintResponse(mountResponse)
 }
 
 type MountCommand struct {
@@ -143,6 +282,8 @@ func main() {
 	var attachCommand AttachCommand
 	var detachCommand DetachCommand
 	var initCommand InitCommand
+	//	var getVolumeNameCommand GetVolumeNameCommand
+
 	var options Options
 	var parser = flags.NewParser(&options, flags.Default)
 
@@ -150,6 +291,11 @@ func main() {
 		"Init the plugin",
 		"The info command print the driver name and version.",
 		&initCommand)
+	//TODO to be enabled when the fix comes in (probably 1.7)
+	//parser.AddCommand("getvolumename",
+	//	"Get Unique Volume Name",
+	//	"Get a cluster wide unique volume name for the volume.",
+	//	&getVolumeNameCommand)
 	parser.AddCommand("mount",
 		"Mount Volume",
 		"Mount a volume Id to a path - returning the path.",
@@ -166,6 +312,12 @@ func main() {
 		"Detach Volume",
 		"Detach a Volume",
 		&detachCommand)
+
+	parser.AddCommand("waitforattach",
+		"Wait For Attach",
+		"Detach a Volume",
+		&detachCommand)
+
 	_, err := parser.Parse()
 	if err != nil {
 		panic(err)
@@ -198,9 +350,4 @@ func setupLogger(logPath string) (*log.Logger, *os.File) {
 	log.SetOutput(logFile)
 	logger := log.New(io.MultiWriter(logFile), "ubiquity-flexvolume: ", log.Lshortfile|log.LstdFlags)
 	return logger, logFile
-}
-
-func closeLogs(logFile *os.File) {
-	logFile.Sync()
-	logFile.Close()
 }
