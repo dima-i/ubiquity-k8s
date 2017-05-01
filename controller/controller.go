@@ -151,7 +151,7 @@ func (c *Controller) WaitForAttach(waitForAttachRequest map[string]string) (reso
 func (c *Controller) IsAttached(isAttachedRequest map[string]string) (resources.FlexVolumeResponse, error) {
 	c.logger.Println("controller-isattached-start")
 	defer c.logger.Println("controller-isattached-end")
-	return resources.FlexVolumeResponse{Attached: false}, nil
+	return resources.FlexVolumeResponse{Attached: true}, nil
 }
 
 //Detach detaches the volume/ fileset from the pod
