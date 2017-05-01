@@ -140,13 +140,13 @@ func (c *Controller) GetVolumeName(getVolumeNameRequest map[string]string) resou
 }
 
 //WaitForAttach: Wait for the volume to be attached on the remote node. On success, the path to the device is returned.
-func (c *Controller) WaitForAttach(waitForAttachRequest map[string]string) (string, error) {
-	return "", nil
+func (c *Controller) WaitForAttach(waitForAttachRequest map[string]string) (resources.FlexVolumeResponse, error) {
+	return resources.FlexVolumeResponse{}, nil
 }
 
 //IsAttached: Check if the volume is attached on the node.
-func (c *Controller) IsAttached(isAttachedRequest map[string]string) (bool, error) {
-	return false, nil
+func (c *Controller) IsAttached(isAttachedRequest map[string]string) (resources.FlexVolumeResponse, error) {
+	return resources.FlexVolumeResponse{Attached: false}, nil
 }
 
 //Detach detaches the volume/ fileset from the pod

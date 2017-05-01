@@ -22,8 +22,8 @@ github.com/IBM/ubiquity-k8s/controller/controller.go:97.97,103.5 1 0
 github.com/IBM/ubiquity-k8s/controller/controller.go:126.105,128.9 2 0
 github.com/IBM/ubiquity-k8s/controller/controller.go:134.2,139.3 1 0
 github.com/IBM/ubiquity-k8s/controller/controller.go:128.9,133.3 1 0
-github.com/IBM/ubiquity-k8s/controller/controller.go:143.92,145.2 1 0
-github.com/IBM/ubiquity-k8s/controller/controller.go:148.84,150.2 1 0
+github.com/IBM/ubiquity-k8s/controller/controller.go:143.114,145.2 1 0
+github.com/IBM/ubiquity-k8s/controller/controller.go:148.108,150.2 1 0
 github.com/IBM/ubiquity-k8s/controller/controller.go:153.107,166.2 4 0
 github.com/IBM/ubiquity-k8s/controller/controller.go:169.104,175.16 4 2
 github.com/IBM/ubiquity-k8s/controller/controller.go:183.2,187.95 3 1

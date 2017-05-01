@@ -46,17 +46,24 @@ type GetVolumeNameCommand struct {
 }
 
 func (g *GetVolumeNameCommand) Execute(args []string) error {
-	controller, err := createController(*configFile)
+	getVolumeNameRequest := make(map[string]string)
+	err := json.Unmarshal([]byte(args[0]), &getVolumeNameRequest)
 	if err != nil {
 		response := resources.FlexVolumeResponse{
-			Status:     "Failure",
-			Message:    fmt.Sprintf("Failed tocreate controller %#v", err),
-			Device:     "",
-			VolumeName: "",
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed to unmarshall request %#v", err),
 		}
 		return utils.PrintResponse(response)
 	}
-	response := controller.GetVolumeName()
+	controller, err := createController(*configFile)
+	if err != nil {
+		response := resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed tocreate controller %#v", err),
+		}
+		return utils.PrintResponse(response)
+	}
+	response := controller.GetVolumeName(getVolumeNameRequest)
 	return utils.PrintResponse(response)
 }
 
@@ -79,7 +86,12 @@ func (a *AttachCommand) Execute(args []string) error {
 	controller, err := createController(*configFile)
 
 	if err != nil {
-		panic(fmt.Sprintf("backend %s not found", configFile))
+		response := resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed to create controller in attach %#v", err),
+			Device:  "",
+		}
+		return utils.PrintResponse(response)
 	}
 	attachResponse := controller.Attach(attachRequest)
 	return utils.PrintResponse(attachResponse)
@@ -113,7 +125,7 @@ func (w *WaitForAttachCommand) Execute(args []string) error {
 	if err != nil {
 		response := resources.FlexVolumeResponse{
 			Status:  "Failure",
-			Message: fmt.Sprintf("Failed to attach volume %#v", err),
+			Message: fmt.Sprintf("Failed to unmarshall wait for attach request%#v", err),
 			Device:  "",
 		}
 		return utils.PrintResponse(response)
@@ -122,9 +134,20 @@ func (w *WaitForAttachCommand) Execute(args []string) error {
 	controller, err := createController(*configFile)
 
 	if err != nil {
-		panic(fmt.Sprintf("backend %s not found", configFile))
+		response := resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed to create controller for wait for attach %#v", err),
+		}
+		return utils.PrintResponse(response)
 	}
-	waitForAttachResponse := controller.WaitForAttach(waitForAttachRequest)
+	waitForAttachResponse, err := controller.WaitForAttach(waitForAttachRequest)
+	if err != nil {
+		response := resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed in wait for attach %#v", err),
+		}
+		return utils.PrintResponse(response)
+	}
 	return utils.PrintResponse(waitForAttachResponse)
 }
 
