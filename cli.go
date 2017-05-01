@@ -305,7 +305,9 @@ func main() {
 	var attachCommand AttachCommand
 	var detachCommand DetachCommand
 	var initCommand InitCommand
-	//	var getVolumeNameCommand GetVolumeNameCommand
+	var getVolumeNameCommand GetVolumeNameCommand
+	var isAttachedCommand IsAttachedCommand
+	var waitForAttachCommand WaitForAttachCommand
 
 	var options Options
 	var parser = flags.NewParser(&options, flags.Default)
@@ -315,10 +317,18 @@ func main() {
 		"The info command print the driver name and version.",
 		&initCommand)
 	//TODO to be enabled when the fix comes in (probably 1.7)
-	//parser.AddCommand("getvolumename",
-	//	"Get Unique Volume Name",
-	//	"Get a cluster wide unique volume name for the volume.",
-	//	&getVolumeNameCommand)
+	parser.AddCommand("getvolumename",
+		"Get Unique Volume Name",
+		"Get a cluster wide unique volume name for the volume.",
+		&getVolumeNameCommand)
+	parser.AddCommand("isattached",
+		"IsAttached",
+		"Checks if volume is attached.",
+		&isAttachedCommand)
+	parser.AddCommand("waitforattach",
+		"Waits for attach",
+		"Wait for a volume to get attached.",
+		&waitForAttachCommand)
 	parser.AddCommand("mount",
 		"Mount Volume",
 		"Mount a volume Id to a path - returning the path.",
