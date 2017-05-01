@@ -144,7 +144,7 @@ func (c *Controller) GetVolumeName(getVolumeNameRequest map[string]string) resou
 func (c *Controller) WaitForAttach(waitForAttachRequest map[string]string) (resources.FlexVolumeResponse, error) {
 	c.logger.Println("controller-waitforattach-start")
 	defer c.logger.Println("controller-waitforattach-end")
-	return resources.FlexVolumeResponse{}, nil
+	return resources.FlexVolumeResponse{Attached: true}, nil
 }
 
 //IsAttached: Check if the volume is attached on the node.
