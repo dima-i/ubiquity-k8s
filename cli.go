@@ -145,14 +145,8 @@ func (w *WaitForAttachCommand) Execute(args []string) error {
 		}
 		return utils.PrintResponse(response)
 	}
-	waitForAttachResponse, err := controller.WaitForAttach(waitForAttachRequest)
-	if err != nil {
-		response := resources.FlexVolumeResponse{
-			Status:  "Failure",
-			Message: fmt.Sprintf("Failed in wait for attach %#v", err),
-		}
-		return utils.PrintResponse(response)
-	}
+	waitForAttachResponse := controller.WaitForAttach(waitForAttachRequest)
+
 	return utils.PrintResponse(waitForAttachResponse)
 }
 
@@ -177,16 +171,9 @@ func (i *IsAttachedCommand) Execute(args []string) error {
 	if err != nil {
 		panic(fmt.Sprintf("backend %s not found", configFile))
 	}
-	attachResponse, err := controller.IsAttached(isAttachRequest)
-	if err != nil {
-		response := resources.FlexVolumeResponse{
-			Status:  "Failure",
-			Message: fmt.Sprintf("Failed in isAttached request %#v", err),
-		}
-		return utils.PrintResponse(response)
-	}
+	isAttachResponse := controller.IsAttached(isAttachRequest)
 
-	return utils.PrintResponse(attachResponse)
+	return utils.PrintResponse(isAttachResponse)
 }
 
 type MountDeviceCommand struct {
