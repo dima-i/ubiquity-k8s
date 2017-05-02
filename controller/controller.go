@@ -75,38 +75,10 @@ func (c *Controller) Attach(attachRequest map[string]string) resources.FlexVolum
 	}
 
 	c.logger.Printf("Found VolumeName: %s\n", volumeName)
-	opts := make(map[string]interface{})
-
-	for key, value := range attachRequest {
-		opts[key] = value
-	}
-
-	c.logger.Printf("Found opts for attach request: #%v\n", opts)
-
 	_, err := c.Client.GetVolume(volumeName)
 
 	if err != nil {
-		if err.Error() == "Volume not found" {
-			err = c.Client.CreateVolume(volumeName, opts)
-			if err != nil && err.Error() != fmt.Sprintf("Volume `%s` already exists", volumeName) {
-				return resources.FlexVolumeResponse{
-					Status:  "Failure",
-					Message: fmt.Sprintf("Failed to attach volume: %#v", err),
-					Device:  volumeName,
-				}
-			} else if err != nil && err.Error() == fmt.Sprintf("Volume `%s` already exists", volumeName) {
-				return resources.FlexVolumeResponse{
-					Status:  "Success",
-					Message: "Volume already attached",
-					Device:  volumeName,
-				}
-			}
-			return resources.FlexVolumeResponse{
-				Status:  "Success",
-				Message: "Volume attached successfully",
-				Device:  volumeName,
-			}
-		}
+
 		return resources.FlexVolumeResponse{
 			Status:  "Failure",
 			Message: "Failed checking volume",
@@ -144,14 +116,39 @@ func (c *Controller) GetVolumeName(getVolumeNameRequest map[string]string) resou
 func (c *Controller) WaitForAttach(waitForAttachRequest map[string]string) (resources.FlexVolumeResponse, error) {
 	c.logger.Println("controller-waitforattach-start")
 	defer c.logger.Println("controller-waitforattach-end")
-	return resources.FlexVolumeResponse{Attached: true}, nil
+
+	volumeName, exists := waitForAttachRequest["volumeName"]
+	if !exists {
+		c.logger.Printf("Failed-to-wait-for-attach-volume, VolumeName found")
+		return resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: fmt.Sprintf("Failed to attach volume: VolumeName not found"),
+			Device:  volumeName,
+		}
+
+	}
+
+	c.logger.Printf("Found VolumeName: %s\n", volumeName)
+	volumeConfig, err := c.Client.GetVolumeConfig(volumeName)
+
+	if err != nil {
+
+		return resources.FlexVolumeResponse{
+			Status:  "Failure",
+			Message: "Failed checking volume",
+			Device:  volumeName}
+
+	}
+	mountpoint, exists := volumeConfig["mountpoint"]
+
+	return resources.FlexVolumeResponse{Message: "Success", Device: mountpoint, Attached: true}, nil
 }
 
 //IsAttached: Check if the volume is attached on the node.
 func (c *Controller) IsAttached(isAttachedRequest map[string]string) (resources.FlexVolumeResponse, error) {
 	c.logger.Println("controller-isattached-start")
 	defer c.logger.Println("controller-isattached-end")
-	return resources.FlexVolumeResponse{Attached: true}, nil
+	return resources.FlexVolumeResponse{Status: "Success", Attached: true}, nil
 }
 
 //Detach detaches the volume/ fileset from the pod
