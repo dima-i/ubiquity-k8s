@@ -348,7 +348,10 @@ func main() {
 
 	_, err := parser.Parse()
 	if err != nil {
-		panic(err)
+
+		logger, _ := setupLogger("/tmp")
+
+		logger.Printf("Error parsing %#v", err)
 		os.Exit(1)
 	}
 }
