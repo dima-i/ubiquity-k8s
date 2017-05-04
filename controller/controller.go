@@ -100,11 +100,14 @@ func (c *Controller) GetVolumeName(getVolumeNameRequest map[string]string) resou
 	defer c.logger.Println("controller-getvolumename-end")
 	volumeName, ok := getVolumeNameRequest["volumeName"]
 	if !ok {
+		c.logger.Printf("error finding volume name in request", getVolumeNameRequest)
 		return resources.FlexVolumeResponse{
 			Status:  "Failure",
 			Message: "Failed getting volumeName",
 		}
 	}
+
+	c.logger.Printf("volume name %s", volumeName)
 	return resources.FlexVolumeResponse{
 		Status:     "Success",
 		Message:    "Volume Name retrieved",
@@ -141,14 +144,14 @@ func (c *Controller) WaitForAttach(waitForAttachRequest map[string]string) resou
 	}
 	mountpoint, exists := volumeConfig["mountpoint"]
 
-	return resources.FlexVolumeResponse{Message: "Success", Device: mountpoint.(string), Attached: true}
+	return resources.FlexVolumeResponse{Message: "Success", Device: mountpoint.(string)}
 }
 
 //IsAttached: Check if the volume is attached on the node.
 func (c *Controller) IsAttached(isAttachedRequest map[string]string) resources.FlexVolumeResponse {
 	c.logger.Println("controller-isattached-start")
 	defer c.logger.Println("controller-isattached-end")
-	return resources.FlexVolumeResponse{Status: "Success", Attached: true}
+	return resources.FlexVolumeResponse{Status: "Success", Message: "Success", Attached: true}
 }
 
 //Detach detaches the volume/ fileset from the pod
@@ -179,7 +182,6 @@ func (c *Controller) Mount(mountRequest resources.FlexVolumeMountRequest) resour
 		return resources.FlexVolumeResponse{
 			Status:  "Failure",
 			Message: fmt.Sprintf("Failed to mount volume %#v", err),
-			Device:  "",
 		}
 	}
 	dir := filepath.Dir(mountRequest.MountPath)
