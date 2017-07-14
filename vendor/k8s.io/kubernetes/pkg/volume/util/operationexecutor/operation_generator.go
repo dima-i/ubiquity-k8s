@@ -21,12 +21,12 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/pkg/features"
 	kevents "k8s.io/kubernetes/pkg/kubelet/events"
@@ -266,9 +266,6 @@ func (og *operationGenerator) GenerateAttachVolumeFunc(
 				og.recorder.Eventf(pod, v1.EventTypeWarning, kevents.FailedMountVolume, eventErr.Error())
 			}
 			return detailedErr
-		} else if devicePath == "" {
-			// do nothing and get device path next time.
-			return nil
 		}
 
 		glog.Infof(volumeToAttach.GenerateMsgDetailed("AttachVolume.Attach succeeded", ""))
@@ -395,7 +392,7 @@ func (og *operationGenerator) GenerateMountVolumeFunc(
 		volumeAttacher, _ = attachableVolumePlugin.NewAttacher()
 	}
 
-	var fsGroup *types.UnixGroupID
+	var fsGroup *int64
 	if volumeToMount.Pod.Spec.SecurityContext != nil &&
 		volumeToMount.Pod.Spec.SecurityContext.FSGroup != nil {
 		fsGroup = volumeToMount.Pod.Spec.SecurityContext.FSGroup
@@ -465,11 +462,14 @@ func (og *operationGenerator) GenerateMountVolumeFunc(
 			return detailedErr
 		}
 
+		simpleMsg, detailedMsg := volumeToMount.GenerateMsg("MountVolume.SetUp succeeded", "")
 		verbosity := glog.Level(1)
 		if isRemount {
 			verbosity = glog.Level(7)
+		} else {
+			og.recorder.Eventf(volumeToMount.Pod, v1.EventTypeNormal, kevents.SuccessfulMountVolume, simpleMsg)
 		}
-		glog.V(verbosity).Infof(volumeToMount.GenerateMsgDetailed("MountVolume.SetUp succeeded", ""))
+		glog.V(verbosity).Infof(detailedMsg)
 
 		// Update actual state of world
 		markVolMountedErr := actualStateOfWorld.MarkVolumeAsMounted(

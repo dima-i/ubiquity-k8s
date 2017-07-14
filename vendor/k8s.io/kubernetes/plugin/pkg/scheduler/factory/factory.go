@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -32,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/kubernetes/pkg/api/v1"
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	appsinformers "k8s.io/kubernetes/pkg/client/informers/informers_generated/externalversions/apps/v1beta1"
@@ -386,6 +386,16 @@ func (f *ConfigFactory) CreateFromConfig(policy schedulerapi.Policy) (*scheduler
 	return f.CreateFromKeys(predicateKeys, priorityKeys, extenders)
 }
 
+// getBinder returns an extender that supports bind or a default binder.
+func (f *ConfigFactory) getBinder(extenders []algorithm.SchedulerExtender) scheduler.Binder {
+	for i := range extenders {
+		if extenders[i].IsBinder() {
+			return extenders[i]
+		}
+	}
+	return &binder{f.client}
+}
+
 // Creates a scheduler from a set of registered fit predicate keys and priority keys.
 func (f *ConfigFactory) CreateFromKeys(predicateKeys, priorityKeys sets.String, extenders []algorithm.SchedulerExtender) (*scheduler.Config, error) {
 	glog.V(2).Infof("Creating scheduler with fit predicates '%v' and priority functions '%v", predicateKeys, priorityKeys)
@@ -422,7 +432,7 @@ func (f *ConfigFactory) CreateFromKeys(predicateKeys, priorityKeys sets.String, 
 		// The scheduler only needs to consider schedulable nodes.
 		NodeLister:          &nodePredicateLister{f.nodeLister},
 		Algorithm:           algo,
-		Binder:              &binder{f.client},
+		Binder:              f.getBinder(extenders),
 		PodConditionUpdater: &podConditionUpdater{f.client},
 		WaitForCacheSync: func() bool {
 			return cache.WaitForCacheSync(f.StopEverything, f.scheduledPodsHasSynced)
@@ -643,7 +653,11 @@ func (factory *ConfigFactory) MakeDefaultErrorFunc(backoff *util.PodBackoff, pod
 		if err == core.ErrNoNodesAvailable {
 			glog.V(4).Infof("Unable to schedule %v %v: no nodes are registered to the cluster; waiting", pod.Namespace, pod.Name)
 		} else {
-			glog.Errorf("Error scheduling %v %v: %v; retrying", pod.Namespace, pod.Name, err)
+			if _, ok := err.(*core.FitError); ok {
+				glog.V(4).Infof("Unable to schedule %v %v: no fit: %v; waiting", pod.Namespace, pod.Name, err)
+			} else {
+				glog.Errorf("Error scheduling %v %v: %v; retrying", pod.Namespace, pod.Name, err)
+			}
 		}
 		backoff.Gc()
 		// Retry asynchronously.

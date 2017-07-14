@@ -21,7 +21,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"math/rand"
 	"net"
 	"net/http"
@@ -30,17 +29,19 @@ import (
 	"os"
 	"path"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"k8s.io/api/core/v1"
+	clientv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -48,7 +49,6 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	clientgoclientset "k8s.io/client-go/kubernetes"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
-	clientv1 "k8s.io/client-go/pkg/api/v1"
 	restclient "k8s.io/client-go/rest"
 	clientauth "k8s.io/client-go/tools/auth"
 	"k8s.io/client-go/tools/clientcmd"
@@ -57,7 +57,6 @@ import (
 	certutil "k8s.io/client-go/util/cert"
 	"k8s.io/kubernetes/cmd/kubelet/app/options"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/apis/componentconfig"
 	componentconfigv1alpha1 "k8s.io/kubernetes/pkg/apis/componentconfig/v1alpha1"
 	"k8s.io/kubernetes/pkg/capabilities"
@@ -68,6 +67,7 @@ import (
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet"
 	"k8s.io/kubernetes/pkg/kubelet/cadvisor"
+	"k8s.io/kubernetes/pkg/kubelet/certificate"
 	"k8s.io/kubernetes/pkg/kubelet/cm"
 	"k8s.io/kubernetes/pkg/kubelet/config"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
@@ -144,7 +144,7 @@ func UnsecuredKubeletDeps(s *options.KubeletServer) (*kubelet.KubeletDeps, error
 	}
 
 	var dockerClient libdocker.Interface
-	if s.ContainerRuntime == "docker" {
+	if s.ContainerRuntime == kubetypes.DockerContainerRuntime {
 		dockerClient = libdocker.ConnectToDockerOrDie(s.DockerEndpoint, s.RuntimeRequestTimeout.Duration,
 			s.ImagePullProgressDeadline.Duration)
 	} else {
@@ -317,7 +317,7 @@ func initConfigz(kc *componentconfig.KubeletConfiguration) (*configz.Config, err
 	return cz, err
 }
 
-// validateConfig validates configuration of Kubelet and returns an error is the input configuration is invalid.
+// validateConfig validates configuration of Kubelet and returns an error if the input configuration is invalid.
 func validateConfig(s *options.KubeletServer) error {
 	if !s.CgroupsPerQOS && len(s.EnforceNodeAllocatable) > 0 {
 		return fmt.Errorf("Node Allocatable enforcement is not supported unless Cgroups Per QOS feature is turned on")
@@ -417,13 +417,15 @@ func run(s *options.KubeletServer, kubeDeps *kubelet.KubeletDeps) (err error) {
 	}
 
 	if kubeDeps == nil {
-		var kubeClient clientset.Interface
-		var eventClient v1core.EventsGetter
-		var externalKubeClient clientgoclientset.Interface
-		var cloud cloudprovider.Interface
+		kubeDeps, err = UnsecuredKubeletDeps(s)
+		if err != nil {
+			return err
+		}
+	}
 
+	if kubeDeps.Cloud == nil {
 		if !cloudprovider.IsExternal(s.CloudProvider) && s.CloudProvider != componentconfigv1alpha1.AutoDetectCloudProvider {
-			cloud, err = cloudprovider.InitCloudProvider(s.CloudProvider, s.CloudConfigFile)
+			cloud, err := cloudprovider.InitCloudProvider(s.CloudProvider, s.CloudConfigFile)
 			if err != nil {
 				return err
 			}
@@ -432,24 +434,48 @@ func run(s *options.KubeletServer, kubeDeps *kubelet.KubeletDeps) (err error) {
 			} else {
 				glog.V(2).Infof("Successfully initialized cloud provider: %q from the config file: %q\n", s.CloudProvider, s.CloudConfigFile)
 			}
+			kubeDeps.Cloud = cloud
 		}
+	}
 
-		nodeName, err := getNodeName(cloud, nodeutil.GetHostname(s.HostnameOverride))
-		if err != nil {
+	nodeName, err := getNodeName(kubeDeps.Cloud, nodeutil.GetHostname(s.HostnameOverride))
+	if err != nil {
+		return err
+	}
+
+	if s.BootstrapKubeconfig != "" {
+		if err := bootstrapClientCert(s.KubeConfig.Value(), s.BootstrapKubeconfig, s.CertDirectory, nodeName); err != nil {
 			return err
 		}
+	}
 
-		if s.BootstrapKubeconfig != "" {
-			if err := bootstrapClientCert(s.KubeConfig.Value(), s.BootstrapKubeconfig, s.CertDirectory, nodeName); err != nil {
-				return err
-			}
-		}
+	// initialize clients if any of the clients are not provided
+	if kubeDeps.KubeClient == nil || kubeDeps.ExternalKubeClient == nil || kubeDeps.EventClient == nil {
+		var kubeClient clientset.Interface
+		var eventClient v1core.EventsGetter
+		var externalKubeClient clientgoclientset.Interface
 
 		clientConfig, err := CreateAPIServerClientConfig(s)
+
+		var clientCertificateManager certificate.Manager
 		if err == nil {
+			if utilfeature.DefaultFeatureGate.Enabled(features.RotateKubeletClientCertificate) {
+				clientCertificateManager, err = certificate.NewKubeletClientCertificateManager(s.CertDirectory, nodeName, clientConfig.CertData, clientConfig.KeyData, clientConfig.CertFile, clientConfig.KeyFile)
+				if err != nil {
+					return err
+				}
+				if err := updateTransport(clientConfig, clientCertificateManager); err != nil {
+					return err
+				}
+			}
+
 			kubeClient, err = clientset.NewForConfig(clientConfig)
 			if err != nil {
 				glog.Warningf("New kubeClient from clientConfig error: %v", err)
+			} else if kubeClient.Certificates() != nil && clientCertificateManager != nil {
+				glog.V(2).Info("Starting client certificate rotation.")
+				clientCertificateManager.SetCertificateSigningRequestClient(kubeClient.Certificates().CertificateSigningRequests())
+				clientCertificateManager.Start()
 			}
 			externalKubeClient, err = clientgoclientset.NewForConfig(clientConfig)
 			if err != nil {
@@ -464,28 +490,19 @@ func run(s *options.KubeletServer, kubeDeps *kubelet.KubeletDeps) (err error) {
 				glog.Warningf("Failed to create API Server client: %v", err)
 			}
 		} else {
-			if s.RequireKubeConfig {
+			switch {
+			case s.RequireKubeConfig:
 				return fmt.Errorf("invalid kubeconfig: %v", err)
-			}
-			if standaloneMode {
+			case standaloneMode:
 				glog.Warningf("No API client: %v", err)
+			case s.KubeConfig.Provided():
+				glog.Warningf("Invalid kubeconfig: %v", err)
 			}
 		}
 
-		kubeDeps, err = UnsecuredKubeletDeps(s)
-		if err != nil {
-			return err
-		}
-
-		kubeDeps.Cloud = cloud
 		kubeDeps.KubeClient = kubeClient
 		kubeDeps.ExternalKubeClient = externalKubeClient
 		kubeDeps.EventClient = eventClient
-	}
-
-	nodeName, err := getNodeName(kubeDeps.Cloud, nodeutil.GetHostname(s.HostnameOverride))
-	if err != nil {
-		return err
 	}
 
 	if kubeDeps.Auth == nil {
@@ -497,7 +514,7 @@ func run(s *options.KubeletServer, kubeDeps *kubelet.KubeletDeps) (err error) {
 	}
 
 	if kubeDeps.CAdvisorInterface == nil {
-		kubeDeps.CAdvisorInterface, err = cadvisor.New(uint(s.CAdvisorPort), s.ContainerRuntime, s.RootDirectory)
+		kubeDeps.CAdvisorInterface, err = cadvisor.New(s.Address, uint(s.CAdvisorPort), s.ContainerRuntime, s.RootDirectory)
 		if err != nil {
 			return err
 		}
@@ -594,6 +611,44 @@ func run(s *options.KubeletServer, kubeDeps *kubelet.KubeletDeps) (err error) {
 	}
 
 	<-done
+	return nil
+}
+
+func updateTransport(clientConfig *restclient.Config, clientCertificateManager certificate.Manager) error {
+	if clientConfig.Transport != nil {
+		return fmt.Errorf("there is already a transport configured")
+	}
+	tlsConfig, err := restclient.TLSConfigFor(clientConfig)
+	if err != nil {
+		return fmt.Errorf("unable to configure TLS for the rest client: %v", err)
+	}
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{}
+	}
+	tlsConfig.Certificates = nil
+	tlsConfig.GetClientCertificate = func(requestInfo *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		cert := clientCertificateManager.Current()
+		if cert == nil {
+			return &tls.Certificate{Certificate: nil}, nil
+		}
+		return cert, nil
+	}
+	clientConfig.Transport = utilnet.SetTransportDefaults(&http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		TLSHandshakeTimeout: 10 * time.Second,
+		TLSClientConfig:     tlsConfig,
+		MaxIdleConnsPerHost: 25,
+		Dial: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).Dial,
+	})
+	clientConfig.CertData = nil
+	clientConfig.KeyData = nil
+	clientConfig.CertFile = ""
+	clientConfig.KeyFile = ""
+	clientConfig.CAData = nil
+	clientConfig.CAFile = ""
 	return nil
 }
 
@@ -823,42 +878,6 @@ func RunKubelet(kubeFlags *options.KubeletFlags, kubeCfg *componentconfig.Kubele
 
 	rlimit.RlimitNumFiles(uint64(kubeCfg.MaxOpenFiles))
 
-	// TODO(dawnchen): remove this once we deprecated old debian containervm images.
-	// This is a workaround for issue: https://github.com/opencontainers/runc/issues/726
-	// The current chosen number is consistent with most of other os dist.
-	const maxKeysPath = "/proc/sys/kernel/keys/root_maxkeys"
-	const minKeys uint64 = 1000000
-	key, err := ioutil.ReadFile(maxKeysPath)
-	if err != nil {
-		glog.Errorf("Cannot read keys quota in %s", maxKeysPath)
-	} else {
-		fields := strings.Fields(string(key))
-		nKey, _ := strconv.ParseUint(fields[0], 10, 64)
-		if nKey < minKeys {
-			glog.Infof("Setting keys quota in %s to %d", maxKeysPath, minKeys)
-			err = ioutil.WriteFile(maxKeysPath, []byte(fmt.Sprintf("%d", uint64(minKeys))), 0644)
-			if err != nil {
-				glog.Warningf("Failed to update %s: %v", maxKeysPath, err)
-			}
-		}
-	}
-	const maxBytesPath = "/proc/sys/kernel/keys/root_maxbytes"
-	const minBytes uint64 = 25000000
-	bytes, err := ioutil.ReadFile(maxBytesPath)
-	if err != nil {
-		glog.Errorf("Cannot read keys bytes in %s", maxBytesPath)
-	} else {
-		fields := strings.Fields(string(bytes))
-		nByte, _ := strconv.ParseUint(fields[0], 10, 64)
-		if nByte < minBytes {
-			glog.Infof("Setting keys bytes in %s to %d", maxBytesPath, minBytes)
-			err = ioutil.WriteFile(maxBytesPath, []byte(fmt.Sprintf("%d", uint64(minBytes))), 0644)
-			if err != nil {
-				glog.Warningf("Failed to update %s: %v", maxBytesPath, err)
-			}
-		}
-	}
-
 	// process pods and exit.
 	if runOnce {
 		if _, err := k.RunOnce(podCfg.Updates()); err != nil {
@@ -914,8 +933,8 @@ func parseResourceList(m componentconfig.ConfigurationMap) (v1.ResourceList, err
 	rl := make(v1.ResourceList)
 	for k, v := range m {
 		switch v1.ResourceName(k) {
-		// Only CPU and memory resources are supported.
-		case v1.ResourceCPU, v1.ResourceMemory:
+		// CPU, memory and local storage resources are supported.
+		case v1.ResourceCPU, v1.ResourceMemory, v1.ResourceStorage:
 			q, err := resource.ParseQuantity(v)
 			if err != nil {
 				return nil, err

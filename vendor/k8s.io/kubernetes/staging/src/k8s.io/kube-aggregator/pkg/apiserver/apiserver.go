@@ -17,8 +17,10 @@ limitations under the License.
 package apiserver
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
-	"net/url"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apimachinery/announced"
@@ -31,12 +33,18 @@ import (
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
-	"k8s.io/apiserver/pkg/util/proxy"
 	kubeinformers "k8s.io/client-go/informers"
-	kubeclientset "k8s.io/client-go/kubernetes"
-	listersv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/pkg/version"
 
+	"bytes"
+	"fmt"
+	"io"
+
+	"github.com/go-openapi/spec"
+	"github.com/golang/glog"
+	"github.com/pkg/errors"
+	"k8s.io/apiserver/pkg/server/openapi"
+	"k8s.io/client-go/transport"
 	"k8s.io/kube-aggregator/pkg/apis/apiregistration"
 	"k8s.io/kube-aggregator/pkg/apis/apiregistration/install"
 	"k8s.io/kube-aggregator/pkg/apis/apiregistration/v1beta1"
@@ -52,6 +60,10 @@ var (
 	registry             = registered.NewOrDie("")
 	Scheme               = runtime.NewScheme()
 	Codecs               = serializer.NewCodecFactory(Scheme)
+)
+
+const (
+	LOAD_OPENAPI_SPEC_MAX_RETRIES = 10
 )
 
 func init() {
@@ -73,30 +85,23 @@ func init() {
 // legacyAPIServiceName is the fixed name of the only non-groupified API version
 const legacyAPIServiceName = "v1."
 
-type ServiceResolver interface {
-	ResolveEndpoint(namespace, name string) (*url.URL, error)
-}
-
-type aggregatorEndpointRouting struct {
-	services  listersv1.ServiceLister
-	endpoints listersv1.EndpointsLister
-}
-
-type aggregatorClusterRouting struct {
-	services listersv1.ServiceLister
-}
-
 type Config struct {
-	GenericConfig       *genericapiserver.Config
-	CoreAPIServerClient kubeclientset.Interface
+	GenericConfig *genericapiserver.Config
+
+	// CoreKubeInformers is used to watch kube resources
+	CoreKubeInformers kubeinformers.SharedInformerFactory
 
 	// ProxyClientCert/Key are the client cert used to identify this proxy. Backing APIServices use
 	// this to confirm the proxy's identity
 	ProxyClientCert []byte
 	ProxyClientKey  []byte
 
-	// Indicates if the Aggregator should send to the cluster IP (false) or route to the endpoints IP (true)
-	EnableAggregatorRouting bool
+	// If present, the Dial method will be used for dialing out to delegate
+	// apiservers.
+	ProxyTransport *http.Transport
+
+	// Mechanism by which the Aggregator will resolve services. Required.
+	ServiceResolver ServiceResolver
 }
 
 // APIAggregator contains state for a Kubernetes cluster master/api server.
@@ -111,11 +116,30 @@ type APIAggregator struct {
 	// this to confirm the proxy's identity
 	proxyClientCert []byte
 	proxyClientKey  []byte
+	proxyTransport  *http.Transport
 
 	// proxyHandlers are the proxy handlers that are currently registered, keyed by apiservice.name
 	proxyHandlers map[string]*proxyHandler
 	// handledGroups are the groups that already have routes
 	handledGroups sets.String
+
+	// Swagger spec for each api service
+	apiServiceSpecs map[string]*spec.Swagger
+
+	// List of the specs that needs to be loaded. When a spec is successfully loaded
+	// it will be removed from this list and added to apiServiceSpecs.
+	// Map values are retry counts. After a preset retries, it will stop
+	// trying.
+	toLoadAPISpec map[string]int
+
+	// protecting toLoadAPISpec and apiServiceSpecs
+	specMutex sync.Mutex
+
+	// rootSpec is the OpenAPI spec of the Aggregator server.
+	rootSpec *spec.Swagger
+
+	// delegationSpec is the delegation API Server's spec (most of API groups are in this spec).
+	delegationSpec *spec.Swagger
 
 	// lister is used to add group handling for /apis/<group> aggregator lookups based on
 	// controller state
@@ -125,7 +149,7 @@ type APIAggregator struct {
 	APIRegistrationInformers informers.SharedInformerFactory
 
 	// Information needed to determine routing for the aggregator
-	routing ServiceResolver
+	serviceResolver ServiceResolver
 }
 
 type completedConfig struct {
@@ -150,14 +174,6 @@ func (c *Config) SkipComplete() completedConfig {
 	return completedConfig{c}
 }
 
-func (r *aggregatorEndpointRouting) ResolveEndpoint(namespace, name string) (*url.URL, error) {
-	return proxy.ResolveEndpoint(r.services, r.endpoints, namespace, name)
-}
-
-func (r *aggregatorClusterRouting) ResolveEndpoint(namespace, name string) (*url.URL, error) {
-	return proxy.ResolveCluster(r.services, namespace, name)
-}
-
 // New returns a new instance of APIAggregator from the given config.
 func (c completedConfig) NewWithDelegate(delegationTarget genericapiserver.DelegationTarget) (*APIAggregator, error) {
 	genericServer, err := c.Config.GenericConfig.SkipComplete().New("kube-aggregator", delegationTarget) // completion is done in Complete, no need for a second time
@@ -173,31 +189,22 @@ func (c completedConfig) NewWithDelegate(delegationTarget genericapiserver.Deleg
 		apiregistrationClient,
 		5*time.Minute, // this is effectively used as a refresh interval right now.  Might want to do something nicer later on.
 	)
-	kubeInformers := kubeinformers.NewSharedInformerFactory(c.CoreAPIServerClient, 5*time.Minute)
-
-	var routing ServiceResolver
-	if c.EnableAggregatorRouting {
-		routing = &aggregatorEndpointRouting{
-			services:  kubeInformers.Core().V1().Services().Lister(),
-			endpoints: kubeInformers.Core().V1().Endpoints().Lister(),
-		}
-	} else {
-		routing = &aggregatorClusterRouting{
-			services: kubeInformers.Core().V1().Services().Lister(),
-		}
-	}
 
 	s := &APIAggregator{
 		GenericAPIServer: genericServer,
 		delegateHandler:  delegationTarget.UnprotectedHandler(),
+		delegationSpec:   delegationTarget.OpenAPISpec(),
 		contextMapper:    c.GenericConfig.RequestContextMapper,
 		proxyClientCert:  c.ProxyClientCert,
 		proxyClientKey:   c.ProxyClientKey,
+		proxyTransport:   c.ProxyTransport,
 		proxyHandlers:    map[string]*proxyHandler{},
+		apiServiceSpecs:  map[string]*spec.Swagger{},
+		toLoadAPISpec:    map[string]int{},
 		handledGroups:    sets.String{},
 		lister:           informerFactory.Apiregistration().InternalVersion().APIServices().Lister(),
 		APIRegistrationInformers: informerFactory,
-		routing:                  routing,
+		serviceResolver:          c.ServiceResolver,
 	}
 
 	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(apiregistration.GroupName, registry, Scheme, metav1.ParameterCodec, Codecs)
@@ -220,17 +227,17 @@ func (c completedConfig) NewWithDelegate(delegationTarget genericapiserver.Deleg
 	s.GenericAPIServer.Handler.NonGoRestfulMux.Handle("/apis", apisHandler)
 	s.GenericAPIServer.Handler.NonGoRestfulMux.UnlistedHandle("/apis/", apisHandler)
 
-	apiserviceRegistrationController := NewAPIServiceRegistrationController(informerFactory.Apiregistration().InternalVersion().APIServices(), kubeInformers.Core().V1().Services(), s)
+	apiserviceRegistrationController := NewAPIServiceRegistrationController(informerFactory.Apiregistration().InternalVersion().APIServices(), c.CoreKubeInformers.Core().V1().Services(), s)
 	availableController := statuscontrollers.NewAvailableConditionController(
 		informerFactory.Apiregistration().InternalVersion().APIServices(),
-		kubeInformers.Core().V1().Services(),
-		kubeInformers.Core().V1().Endpoints(),
+		c.CoreKubeInformers.Core().V1().Services(),
+		c.CoreKubeInformers.Core().V1().Endpoints(),
 		apiregistrationClient.Apiregistration(),
 	)
 
 	s.GenericAPIServer.AddPostStartHook("start-kube-aggregator-informers", func(context genericapiserver.PostStartHookContext) error {
 		informerFactory.Start(context.StopCh)
-		kubeInformers.Start(context.StopCh)
+		c.CoreKubeInformers.Start(context.StopCh)
 		return nil
 	})
 	s.GenericAPIServer.AddPostStartHook("apiservice-registration-controller", func(context genericapiserver.PostStartHookContext) error {
@@ -241,6 +248,20 @@ func (c completedConfig) NewWithDelegate(delegationTarget genericapiserver.Deleg
 		go availableController.Run(context.StopCh)
 		return nil
 	})
+
+	s.GenericAPIServer.PrepareOpenAPIService()
+
+	if s.GenericAPIServer.OpenAPIService != nil {
+		s.rootSpec = s.GenericAPIServer.OpenAPIService.GetSpec()
+		if err := s.updateOpenAPISpec(); err != nil {
+			return nil, err
+		}
+		s.GenericAPIServer.OpenAPIService.AddUpdateHook(func(r *http.Request) {
+			if s.tryLoadingOpenAPISpecs(r) {
+				s.updateOpenAPISpec()
+			}
+		})
+	}
 
 	return s, nil
 }
@@ -267,10 +288,14 @@ func (s *APIAggregator) AddAPIService(apiService *apiregistration.APIService) {
 		localDelegate:   s.delegateHandler,
 		proxyClientCert: s.proxyClientCert,
 		proxyClientKey:  s.proxyClientKey,
-		routing:         s.routing,
+		proxyTransport:  s.proxyTransport,
+		serviceResolver: s.serviceResolver,
 	}
 	proxyHandler.updateAPIService(apiService)
 	s.proxyHandlers[apiService.Name] = proxyHandler
+
+	s.deferLoadAPISpec(apiService.Name)
+
 	s.GenericAPIServer.Handler.NonGoRestfulMux.Handle(proxyPath, proxyHandler)
 	s.GenericAPIServer.Handler.NonGoRestfulMux.UnlistedHandlePrefix(proxyPath+"/", proxyHandler)
 
@@ -299,6 +324,19 @@ func (s *APIAggregator) AddAPIService(apiService *apiregistration.APIService) {
 	s.handledGroups.Insert(apiService.Spec.Group)
 }
 
+func (s *APIAggregator) deferLoadAPISpec(name string) {
+	s.specMutex.Lock()
+	defer s.specMutex.Unlock()
+	s.toLoadAPISpec[name] = 0
+}
+
+func (s *APIAggregator) deleteApiSpec(name string) {
+	s.specMutex.Lock()
+	defer s.specMutex.Unlock()
+	delete(s.apiServiceSpecs, name)
+	delete(s.toLoadAPISpec, name)
+}
+
 // RemoveAPIService removes the APIService from being handled.  It is not thread-safe, so only call it on one thread at a time please.
 // It's a slow moving API, so its ok to run the controller on a single thread.
 func (s *APIAggregator) RemoveAPIService(apiServiceName string) {
@@ -312,7 +350,124 @@ func (s *APIAggregator) RemoveAPIService(apiServiceName string) {
 	s.GenericAPIServer.Handler.NonGoRestfulMux.Unregister(proxyPath)
 	s.GenericAPIServer.Handler.NonGoRestfulMux.Unregister(proxyPath + "/")
 	delete(s.proxyHandlers, apiServiceName)
+	s.deleteApiSpec(apiServiceName)
+	s.updateOpenAPISpec()
 
 	// TODO unregister group level discovery when there are no more versions for the group
 	// We don't need this right away because the handler properly delegates when no versions are present
+}
+
+func (_ *APIAggregator) loadOpenAPISpec(p *proxyHandler, r *http.Request) (*spec.Swagger, error) {
+	value := p.handlingInfo.Load()
+	if value == nil {
+		return nil, nil
+	}
+	handlingInfo := value.(proxyHandlingInfo)
+	if handlingInfo.local {
+		return nil, nil
+	}
+	loc, err := p.serviceResolver.ResolveEndpoint(handlingInfo.serviceNamespace, handlingInfo.serviceName)
+	if err != nil {
+		return nil, fmt.Errorf("missing route")
+	}
+	host := loc.Host
+
+	var w io.Reader
+	req, err := http.NewRequest("GET", "/swagger.json", w)
+	if err != nil {
+		return nil, err
+	}
+	req.URL.Scheme = "https"
+	req.URL.Host = host
+
+	req = req.WithContext(context.Background())
+	// Get user from the original request
+	ctx, ok := p.contextMapper.Get(r)
+	if !ok {
+		return nil, fmt.Errorf("missing context")
+	}
+	user, ok := genericapirequest.UserFrom(ctx)
+	if !ok {
+		return nil, fmt.Errorf("missing user")
+	}
+	proxyRoundTripper := transport.NewAuthProxyRoundTripper(user.GetName(), user.GetGroups(), user.GetExtra(), handlingInfo.proxyRoundTripper)
+	res, err := proxyRoundTripper.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, errors.New(res.Status)
+	}
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(res.Body)
+	bytes := buf.Bytes()
+	var s spec.Swagger
+	if err := json.Unmarshal(bytes, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// Returns true if any Spec is loaded
+func (s *APIAggregator) tryLoadingOpenAPISpecs(r *http.Request) bool {
+	s.specMutex.Lock()
+	defer s.specMutex.Unlock()
+	if len(s.toLoadAPISpec) == 0 {
+		return false
+	}
+	loaded := false
+	newList := map[string]int{}
+	for name, retries := range s.toLoadAPISpec {
+		if retries >= LOAD_OPENAPI_SPEC_MAX_RETRIES {
+			continue
+		}
+		proxyHandler := s.proxyHandlers[name]
+		if spec, err := s.loadOpenAPISpec(proxyHandler, r); err != nil {
+			glog.Warningf("Failed to Load OpenAPI spec (try %d of %d) for %s, err=%s", retries+1, LOAD_OPENAPI_SPEC_MAX_RETRIES, name, err)
+			newList[name] = retries + 1
+		} else if spec != nil {
+			s.apiServiceSpecs[name] = spec
+			loaded = true
+		}
+		s.toLoadAPISpec = newList
+	}
+	return loaded
+}
+
+func (s *APIAggregator) updateOpenAPISpec() error {
+	s.specMutex.Lock()
+	defer s.specMutex.Unlock()
+	if s.GenericAPIServer.OpenAPIService == nil {
+		return nil
+	}
+	sp, err := openapi.CloneSpec(s.rootSpec)
+	if err != nil {
+		return err
+	}
+	openapi.FilterSpecByPaths(sp, []string{"/apis/apiregistration.k8s.io/"})
+	if _, found := sp.Paths.Paths["/version/"]; found {
+		return fmt.Errorf("Cleanup didn't work")
+	}
+	if err := openapi.MergeSpecs(sp, s.delegationSpec); err != nil {
+		return err
+	}
+
+	for k, v := range s.apiServiceSpecs {
+		version := apiregistration.APIServiceNameToGroupVersion(k)
+
+		proxyPath := "/apis/" + version.Group + "/"
+		// v1. is a special case for the legacy API.  It proxies to a wider set of endpoints.
+		if k == legacyAPIServiceName {
+			proxyPath = "/api/"
+		}
+		spc, err := openapi.CloneSpec(v)
+		if err != nil {
+			return err
+		}
+		openapi.FilterSpecByPaths(spc, []string{proxyPath})
+		if err := openapi.MergeSpecs(sp, spc); err != nil {
+			return err
+		}
+	}
+	return s.GenericAPIServer.OpenAPIService.UpdateSpec(sp)
 }

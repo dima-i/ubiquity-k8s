@@ -52,7 +52,7 @@ aliases:
     - pmorie
     - resouer
     - sjpotter
-    - timstclair
+    - tallclair
     - tmrts
     - vishh
     - yifan-gu
@@ -79,3 +79,5 @@ aliases:
   sig-apps-api-approvers:
     - erictune
     - smarterclayton
+  sig-leads:
+    - spiffxp

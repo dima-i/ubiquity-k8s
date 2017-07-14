@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -45,7 +46,6 @@ import (
 	"k8s.io/kubernetes/federation/pkg/dnsprovider/providers/coredns"
 	"k8s.io/kubernetes/federation/pkg/kubefed/util"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/apis/rbac"
 	client "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
@@ -385,7 +385,7 @@ func (i *initFederation) Run(cmdOut io.Writer, config util.AdminConfig) error {
 		return err
 	}
 	glog.V(4).Info("Successfully created federation controller manager deployment")
-	fmt.Println(cmdOut, " done")
+	fmt.Fprintln(cmdOut, " done")
 
 	fmt.Fprint(cmdOut, "Updating kubeconfig...")
 	glog.V(4).Info("Updating kubeconfig")
@@ -496,6 +496,7 @@ func createService(cmdOut io.Writer, clientset client.Interface, namespace, svcN
 func getClusterNodeIPs(clientset client.Interface) ([]string, error) {
 	preferredAddressTypes := []api.NodeAddressType{
 		api.NodeExternalIP,
+		api.NodeInternalIP,
 	}
 	nodeList, err := clientset.Core().Nodes().List(metav1.ListOptions{})
 	if err != nil {

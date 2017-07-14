@@ -17,8 +17,10 @@ limitations under the License.
 package scheduler
 
 import (
+	"fmt"
 	"time"
 
+	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -26,7 +28,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	corelisters "k8s.io/kubernetes/pkg/client/listers/core/v1"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/algorithm"
@@ -35,8 +36,6 @@ import (
 	"k8s.io/kubernetes/plugin/pkg/scheduler/metrics"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/schedulercache"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/util"
-
-	"fmt"
 
 	"github.com/golang/glog"
 )
@@ -271,7 +270,7 @@ func (sched *Scheduler) scheduleOne() {
 	// bind the pod to its host asynchronously (we can do this b/c of the assumption step above).
 	go func() {
 		err := sched.bind(pod, &v1.Binding{
-			ObjectMeta: metav1.ObjectMeta{Namespace: pod.Namespace, Name: pod.Name},
+			ObjectMeta: metav1.ObjectMeta{Namespace: pod.Namespace, Name: pod.Name, UID: pod.UID},
 			Target: v1.ObjectReference{
 				Kind: "Node",
 				Name: suggestedHost,

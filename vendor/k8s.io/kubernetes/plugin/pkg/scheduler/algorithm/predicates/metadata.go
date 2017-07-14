@@ -18,9 +18,10 @@ package predicates
 
 import (
 	"github.com/golang/glog"
-	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/api/core/v1"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/algorithm"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/schedulercache"
+	schedutil "k8s.io/kubernetes/plugin/pkg/scheduler/util"
 )
 
 type PredicateMetadataFactory struct {
@@ -48,11 +49,11 @@ func (pfactory *PredicateMetadataFactory) GetMetadata(pod *v1.Pod, nodeNameToInf
 		pod:                       pod,
 		podBestEffort:             isPodBestEffort(pod),
 		podRequest:                GetResourceRequest(pod),
-		podPorts:                  GetUsedPorts(pod),
+		podPorts:                  schedutil.GetUsedPorts(pod),
 		matchingAntiAffinityTerms: matchingTerms,
 	}
 	for predicateName, precomputeFunc := range predicatePrecomputations {
-		glog.V(10).Info("Precompute: %v", predicateName)
+		glog.V(10).Infof("Precompute: %v", predicateName)
 		precomputeFunc(predicateMetadata)
 	}
 	return predicateMetadata

@@ -33,8 +33,10 @@ POD_MANIFEST_PATH=${POD_MANIFEST_PATH:-"/var/run/kubernetes/static-pods"}
 KUBELET_FLAGS=${KUBELET_FLAGS:-""}
 # Name of the network plugin, eg: "kubenet"
 NET_PLUGIN=${NET_PLUGIN:-""}
-# Place the binaries required by NET_PLUGIN in this directory, eg: "/home/kubernetes/bin".
-NET_PLUGIN_DIR=${NET_PLUGIN_DIR:-""}
+# Place the config files and binaries required by NET_PLUGIN in these directory,
+# eg: "/etc/cni/net.d" for config files, and "/opt/cni/bin" for binaries.
+CNI_CONF_DIR=${CNI_CONF_DIR:-""}
+CNI_BIN_DIR=${CNI_BIN_DIR:-""}
 SERVICE_CLUSTER_IP_RANGE=${SERVICE_CLUSTER_IP_RANGE:-10.0.0.0/24}
 FIRST_SERVICE_CLUSTER_IP=${FIRST_SERVICE_CLUSTER_IP:-10.0.0.1}
 # if enabled, must set CGROUP_ROOT
@@ -96,6 +98,9 @@ ADMISSION_CONTROL_CONFIG_FILE=${ADMISSION_CONTROL_CONFIG_FILE:-""}
 # START_MODE can be 'all', 'kubeletonly', or 'nokubelet'
 START_MODE=${START_MODE:-"all"}
 
+# A list of controllers to enable
+KUBE_CONTROLLERS="${KUBE_CONTROLLERS:-"*"}"
+
 # sanity check for OpenStack provider
 if [ "${CLOUD_PROVIDER}" == "openstack" ]; then
     if [ "${CLOUD_CONFIG}" == "" ]; then
@@ -147,7 +152,7 @@ do
             ;;
         O)
             GO_OUT=$(guess_built_binary_path)
-            if [ $GO_OUT == "" ]; then
+            if [ "$GO_OUT" == "" ]; then
                 echo "Could not guess the correct output directory to use."
                 exit 1
             fi
@@ -401,7 +406,7 @@ function start_apiserver {
     fi
 
     # Admission Controllers to invoke prior to persisting objects in cluster
-    ADMISSION_CONTROL=NamespaceLifecycle,LimitRanger,ServiceAccount${security_admission},ResourceQuota,DefaultStorageClass,DefaultTolerationSeconds
+    ADMISSION_CONTROL=Initializers,NamespaceLifecycle,LimitRanger,ServiceAccount${security_admission},ResourceQuota,DefaultStorageClass,DefaultTolerationSeconds
 
     # This is the default dir and filename where the apiserver will generate a self-signed cert
     # which should be able to be used as the CA to verify itself
@@ -572,6 +577,7 @@ function start_controller_manager {
     CTLRMGR_LOG=${LOG_DIR}/kube-controller-manager.log
     ${CONTROLPLANE_SUDO} "${GO_OUT}/hyperkube" controller-manager \
       --v=${LOG_LEVEL} \
+      --vmodule="${LOG_SPEC}" \
       --service-account-private-key-file="${SERVICE_ACCOUNT_KEY}" \
       --root-ca-file="${ROOT_CA_FILE}" \
       --cluster-signing-cert-file="${CLUSTER_SIGNING_CERT_FILE}" \
@@ -584,6 +590,7 @@ function start_controller_manager {
       --cloud-config="${CLOUD_CONFIG}" \
       --kubeconfig "$CERT_DIR"/controller.kubeconfig \
       --use-service-account-credentials \
+      --controllers="${KUBE_CONTROLLERS}" \
       --master="https://${API_HOST}:${API_SECURE_PORT}" >"${CTLRMGR_LOG}" 2>&1 &
     CTLRMGR_PID=$!
 }
@@ -625,9 +632,14 @@ function start_kubelet {
         auth_args="${auth_args} --client-ca-file=${CLIENT_CA_FILE}"
       fi
 
-      net_plugin_dir_args=""
-      if [[ -n "${NET_PLUGIN_DIR}" ]]; then
-        net_plugin_dir_args="--network-plugin-dir=${NET_PLUGIN_DIR}"
+      cni_conf_dir_args=""
+      if [[ -n "${CNI_CONF_DIR}" ]]; then
+        cni_conf_dir_args="--cni-conf-dir=${CNI_CONF_DIR}"
+      fi
+
+      cni_bin_dir_args=""
+      if [[ -n "${CNI_BIN_DIR}" ]]; then
+        cni_bin_dir_args="--cni-bin-dir=${CNI_BIN_DIR}"
       fi
 
       container_runtime_endpoint_args=""
@@ -642,6 +654,7 @@ function start_kubelet {
 
       sudo -E "${GO_OUT}/hyperkube" kubelet ${priv_arg}\
         --v=${LOG_LEVEL} \
+        --vmodule="${LOG_SPEC}" \
         --chaos-chance="${CHAOS_CHANCE}" \
         --container-runtime="${CONTAINER_RUNTIME}" \
         --rkt-path="${RKT_PATH}" \
@@ -664,7 +677,8 @@ function start_kubelet {
         --pod-manifest-path="${POD_MANIFEST_PATH}" \
         ${auth_args} \
         ${dns_args} \
-        ${net_plugin_dir_args} \
+        ${cni_conf_dir_args} \
+        ${cni_bin_dir_args} \
         ${net_plugin_args} \
         ${container_runtime_endpoint_args} \
         ${image_service_endpoint_args} \

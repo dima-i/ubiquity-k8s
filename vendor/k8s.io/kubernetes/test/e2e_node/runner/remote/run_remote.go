@@ -282,7 +282,7 @@ func main() {
 			fmt.Printf("Initializing e2e tests using host %s.\n", host)
 			running++
 			go func(host string, junitFilePrefix string) {
-				results <- testHost(host, *cleanup, junitFilePrefix, *ginkgoFlags)
+				results <- testHost(host, *cleanup, "", junitFilePrefix, *ginkgoFlags)
 			}(host, host)
 		}
 	}
@@ -368,7 +368,7 @@ func getImageMetadata(input string) *compute.Metadata {
 }
 
 // Run tests in archive against host
-func testHost(host string, deleteFiles bool, junitFilePrefix string, ginkgoFlagsStr string) *TestResult {
+func testHost(host string, deleteFiles bool, imageDesc, junitFilePrefix, ginkgoFlagsStr string) *TestResult {
 	instance, err := computeService.Instances.Get(*project, *zone, host).Do()
 	if err != nil {
 		return &TestResult{
@@ -398,7 +398,7 @@ func testHost(host string, deleteFiles bool, junitFilePrefix string, ginkgoFlags
 		}
 	}
 
-	output, exitOk, err := remote.RunRemote(suite, path, host, deleteFiles, junitFilePrefix, *testArgs, ginkgoFlagsStr)
+	output, exitOk, err := remote.RunRemote(suite, path, host, deleteFiles, imageDesc, junitFilePrefix, *testArgs, ginkgoFlagsStr)
 	return &TestResult{
 		output: output,
 		err:    err,
@@ -484,7 +484,7 @@ func testImage(imageConfig *internalGCEImage, junitFilePrefix string) *TestResul
 	// If we are going to delete the instance, don't bother with cleaning up the files
 	deleteFiles := !*deleteInstances && *cleanup
 
-	result := testHost(host, deleteFiles, junitFilePrefix, ginkgoFlagsStr)
+	result := testHost(host, deleteFiles, imageConfig.image, junitFilePrefix, ginkgoFlagsStr)
 	// This is a temporary solution to collect serial node serial log. Only port 1 contains useful information.
 	// TODO(random-liu): Extract out and unify log collection logic with cluste e2e.
 	serialPortOutput, err := computeService.Instances.GetSerialPortOutput(*project, *zone, host).Port(1).Do()
@@ -590,7 +590,39 @@ func createInstance(imageConfig *internalGCEImage) (string, error) {
 		}
 		instanceRunning = true
 	}
+	// If instance didn't reach running state in time, return with error now.
+	if err != nil {
+		return name, err
+	}
+	// Instance reached running state in time, make sure that cloud-init is complete
+	if isCloudInitUsed(imageConfig.metadata) {
+		cloudInitFinished := false
+		for i := 0; i < 60 && !cloudInitFinished; i++ {
+			if i > 0 {
+				time.Sleep(time.Second * 20)
+			}
+			var finished string
+			finished, err = remote.SSH(name, "ls", "/var/lib/cloud/instance/boot-finished")
+			if err != nil {
+				err = fmt.Errorf("instance %s has not finished cloud-init script: %s", name, finished)
+				continue
+			}
+			cloudInitFinished = true
+		}
+	}
 	return name, err
+}
+
+func isCloudInitUsed(metadata *compute.Metadata) bool {
+	if metadata == nil {
+		return false
+	}
+	for _, item := range metadata.Items {
+		if item.Key == "user-data" && strings.HasPrefix(item.Value, "#cloud-config") {
+			return true
+		}
+	}
+	return false
 }
 
 func getExternalIp(instance *compute.Instance) string {

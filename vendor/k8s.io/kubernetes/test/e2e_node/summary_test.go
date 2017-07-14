@@ -22,9 +22,9 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/kubernetes/pkg/api/v1"
 	stats "k8s.io/kubernetes/pkg/kubelet/apis/stats/v1alpha1"
 	"k8s.io/kubernetes/test/e2e/framework"
 
@@ -285,7 +285,7 @@ func getSummaryTestPods(f *framework.Framework, numRestarts int32, names ...stri
 					{
 						Name:    "busybox-container",
 						Image:   "gcr.io/google_containers/busybox:1.24",
-						Command: getRestartingContainerCommand("/test-empty-dir-mnt", 0, numRestarts, "ping -c 1 google.com; echo 'hello world' >> /test-empty-dir-mnt/file"),
+						Command: getRestartingContainerCommand("/test-empty-dir-mnt", 0, numRestarts, "ping -c 1 google.com; echo 'hello world' >> /test-empty-dir-mnt/file;"),
 						Resources: v1.ResourceRequirements{
 							Limits: v1.ResourceList{
 								// Must set memory limit to get MemoryStats.AvailableBytes

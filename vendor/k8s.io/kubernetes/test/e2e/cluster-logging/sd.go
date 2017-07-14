@@ -26,34 +26,35 @@ import (
 	. "github.com/onsi/ginkgo"
 )
 
-var _ = framework.KubeDescribe("Cluster level logging using GCL", func() {
-	f := framework.NewDefaultFramework("gcl-logging")
+var _ = framework.KubeDescribe("Cluster level logging implemented by Stackdriver", func() {
+	f := framework.NewDefaultFramework("sd-logging")
 
 	BeforeEach(func() {
 		framework.SkipUnlessProviderIs("gce", "gke")
 	})
 
-	It("should check that logs from containers are ingested in GCL", func() {
+	It("should ingest logs from applications", func() {
 		podName := "synthlogger"
 
-		gclLogsProvider, err := newGclLogsProvider(f)
-		framework.ExpectNoError(err, "Failed to create GCL logs provider")
+		sdLogsProvider, err := newSdLogsProvider(f)
+		framework.ExpectNoError(err, "Failed to create Stackdriver logs provider")
 
-		err = gclLogsProvider.EnsureWorking()
-		framework.ExpectNoError(err, "GCL is not working")
+		err = sdLogsProvider.Init()
+		defer sdLogsProvider.Cleanup()
+		framework.ExpectNoError(err, "Failed to init Stackdriver logs provider")
 
-		err = ensureSingleFluentdOnEachNode(f, gclLogsProvider.FluentdApplicationName())
+		err = ensureSingleFluentdOnEachNode(f, sdLogsProvider.FluentdApplicationName())
 		framework.ExpectNoError(err, "Fluentd deployed incorrectly")
 
 		By("Running synthetic logger")
-		pod := createLoggingPod(f, podName, "", 10*60, 10*time.Minute)
+		pod := startNewLoggingPod(f, podName, "", 10*60, 10*time.Minute)
 		defer f.PodClient().Delete(podName, &meta_v1.DeleteOptions{})
 		err = framework.WaitForPodNameRunningInNamespace(f.ClientSet, podName, f.Namespace.Name)
 		framework.ExpectNoError(err, fmt.Sprintf("Should've successfully waited for pod %s to be running", podName))
 
 		By("Waiting for logs to ingest")
 		config := &loggingTestConfig{
-			LogsProvider:              gclLogsProvider,
+			LogsProvider:              sdLogsProvider,
 			Pods:                      []*loggingPod{pod},
 			IngestionTimeout:          10 * time.Minute,
 			MaxAllowedLostFraction:    0,

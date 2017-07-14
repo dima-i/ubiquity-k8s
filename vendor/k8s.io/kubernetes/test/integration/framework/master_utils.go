@@ -31,11 +31,17 @@ import (
 	"github.com/pborman/uuid"
 
 	"github.com/golang/glog"
+	apps "k8s.io/api/apps/v1beta1"
+	autoscaling "k8s.io/api/autoscaling/v1"
+	certificates "k8s.io/api/certificates/v1beta1"
+	"k8s.io/api/core/v1"
+	extensions "k8s.io/api/extensions/v1beta1"
+	rbac "k8s.io/api/rbac/v1alpha1"
+	storage "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/apimachinery/pkg/watch"
 	authauthenticator "k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/apiserver/pkg/authentication/authenticatorfactory"
 	authenticatorunion "k8s.io/apiserver/pkg/authentication/request/union"
@@ -53,17 +59,9 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
-	"k8s.io/kubernetes/pkg/api/v1"
-	apps "k8s.io/kubernetes/pkg/apis/apps/v1beta1"
-	autoscaling "k8s.io/kubernetes/pkg/apis/autoscaling/v1"
 	"k8s.io/kubernetes/pkg/apis/batch"
-	certificates "k8s.io/kubernetes/pkg/apis/certificates/v1beta1"
-	extensions "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	policy "k8s.io/kubernetes/pkg/apis/policy/v1alpha1"
-	rbac "k8s.io/kubernetes/pkg/apis/rbac/v1alpha1"
-	storage "k8s.io/kubernetes/pkg/apis/storage/v1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
-	coreclient "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/typed/core/v1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	informers "k8s.io/kubernetes/pkg/client/informers/informers_generated/externalversions"
 	"k8s.io/kubernetes/pkg/controller"
@@ -253,7 +251,7 @@ func startMasterOrDie(masterConfig *master.Config, incomingServer *httptest.Serv
 	}
 	masterConfig.GenericConfig.SharedInformerFactory = extinformers.NewSharedInformerFactory(clientset, masterConfig.GenericConfig.LoopbackClientConfig.Timeout)
 
-	m, err = masterConfig.Complete().New(genericapiserver.EmptyDelegate, nil)
+	m, err = masterConfig.Complete().New(genericapiserver.EmptyDelegate)
 	if err != nil {
 		closeFn()
 		glog.Fatalf("error in bringing up the master: %v", err)
@@ -287,30 +285,6 @@ func startMasterOrDie(masterConfig *master.Config, incomingServer *httptest.Serv
 	if err != nil {
 		closeFn()
 		glog.Fatal(err)
-	}
-
-	// wait for services to be ready
-	if masterConfig.EnableCoreControllers {
-		// TODO Once /healthz is updated for posthooks, we'll wait for good health
-		coreClient := coreclient.NewForConfigOrDie(&cfg)
-		svcWatch, err := coreClient.Services(metav1.NamespaceDefault).Watch(metav1.ListOptions{})
-		if err != nil {
-			closeFn()
-			glog.Fatal(err)
-		}
-		_, err = watch.Until(30*time.Second, svcWatch, func(event watch.Event) (bool, error) {
-			if event.Type != watch.Added {
-				return false, nil
-			}
-			if event.Object.(*v1.Service).Name == "kubernetes" {
-				return true, nil
-			}
-			return false, nil
-		})
-		if err != nil {
-			closeFn()
-			glog.Fatal(err)
-		}
 	}
 
 	return m, s, closeFn

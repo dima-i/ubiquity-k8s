@@ -36,7 +36,6 @@ import (
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/openstack"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/photon"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/vsphere"
-	"k8s.io/kubernetes/pkg/util/io"
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/aws_ebs"
 	"k8s.io/kubernetes/pkg/volume/azure_dd"
@@ -54,6 +53,8 @@ import (
 	"k8s.io/kubernetes/pkg/volume/quobyte"
 	"k8s.io/kubernetes/pkg/volume/rbd"
 	"k8s.io/kubernetes/pkg/volume/scaleio"
+	"k8s.io/kubernetes/pkg/volume/storageos"
+	volumeutil "k8s.io/kubernetes/pkg/volume/util"
 	"k8s.io/kubernetes/pkg/volume/vsphere_volume"
 )
 
@@ -75,6 +76,7 @@ func ProbeAttachableVolumePlugins(config componentconfig.VolumeConfiguration) []
 	allPlugins = append(allPlugins, azure_dd.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, photon_pd.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, scaleio.ProbeVolumePlugins()...)
+	allPlugins = append(allPlugins, storageos.ProbeVolumePlugins()...)
 	return allPlugins
 }
 
@@ -123,6 +125,7 @@ func ProbeControllerVolumePlugins(cloud cloudprovider.Interface, config componen
 	allPlugins = append(allPlugins, portworx.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, scaleio.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, local.ProbeVolumePlugins()...)
+	allPlugins = append(allPlugins, storageos.ProbeVolumePlugins()...)
 
 	if cloud != nil {
 		switch {
@@ -149,7 +152,7 @@ func ProbeControllerVolumePlugins(cloud cloudprovider.Interface, config componen
 // If unsuccessful, an error is returned. Function is exported for reuse downstream.
 func AttemptToLoadRecycler(path string, config *volume.VolumeConfig) error {
 	if path != "" {
-		recyclerPod, err := io.LoadPodFromFile(path)
+		recyclerPod, err := volumeutil.LoadPodFromFile(path)
 		if err != nil {
 			return err
 		}

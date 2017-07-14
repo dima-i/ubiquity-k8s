@@ -19,6 +19,9 @@
 KUBE_ROOT=$(dirname "${BASH_SOURCE}")/../..
 source "${KUBE_ROOT}/cluster/gce/config-common.sh"
 
+# Specifying KUBE_GCE_API_ENDPOINT will override the default GCE Compute API endpoint (https://www.googleapis.com/compute/v1/).
+# This endpoint has to be pointing to v1 api. For example, https://www.googleapis.com/compute/staging_v1/
+GCE_API_ENDPOINT=${KUBE_GCE_API_ENDPOINT:-}
 GCLOUD=gcloud
 ZONE=${KUBE_GCE_ZONE:-us-central1-b}
 REGION=${ZONE%-*}
@@ -62,12 +65,14 @@ if [[ "${NODE_OS_DISTRIBUTION}" == "debian" ]]; then
     NODE_ACCELERATORS=""
 fi
 
-# By default a cluster will be started with the master on GCI and nodes on
-# containervm. If you are updating the containervm version, update this
-# variable. Also please update corresponding image for node e2e at:
+# By default a cluster will be started with the master and nodes
+# on Container-VM, the deprecated OS. Some tests assume container-VM,
+# and only when that is fixed can we use Container-Optimized OS
+# (cos, gci) as we do in config-default.sh.
+# Also please update corresponding image for node e2e at:
 # https://github.com/kubernetes/kubernetes/blob/master/test/e2e_node/jenkins/image-config.yaml
-CVM_VERSION=${CVM_VERSION:-container-vm-v20170214}
-GCI_VERSION=${KUBE_GCI_VERSION:-cos-beta-59-9460-20-0}
+CVM_VERSION=${CVM_VERSION:-container-vm-v20170627}
+GCI_VERSION=${KUBE_GCI_VERSION:-cos-stable-59-9460-64-0}
 MASTER_IMAGE=${KUBE_GCE_MASTER_IMAGE:-}
 MASTER_IMAGE_PROJECT=${KUBE_GCE_MASTER_PROJECT:-cos-cloud}
 NODE_IMAGE=${KUBE_GCE_NODE_IMAGE:-${CVM_VERSION}}
@@ -81,6 +86,7 @@ NETWORK=${KUBE_GCE_NETWORK:-e2e}
 INSTANCE_PREFIX="${KUBE_GCE_INSTANCE_PREFIX:-e2e-test-${USER}}"
 CLUSTER_NAME="${CLUSTER_NAME:-${INSTANCE_PREFIX}}"
 MASTER_NAME="${INSTANCE_PREFIX}-master"
+AGGREGATOR_MASTER_NAME="${INSTANCE_PREFIX}-aggregator"
 INITIAL_ETCD_CLUSTER="${MASTER_NAME}"
 ETCD_QUORUM_READ="${ENABLE_ETCD_QUORUM_READ:-false}"
 MASTER_TAG="${INSTANCE_PREFIX}-master"
@@ -90,7 +96,7 @@ CLUSTER_IP_RANGE="${CLUSTER_IP_RANGE:-10.100.0.0/14}"
 MASTER_IP_RANGE="${MASTER_IP_RANGE:-10.246.0.0/24}"
 # NODE_IP_RANGE is used when ENABLE_IP_ALIASES=true. It is the primary range in
 # the subnet and is the range used for node instance IPs.
-NODE_IP_RANGE="${NODE_IP_RANGE:-10.40.0.0/22}"
+NODE_IP_RANGE="$(get-node-ip-range)"
 
 RUNTIME_CONFIG="${KUBE_RUNTIME_CONFIG:-}"
 
@@ -127,6 +133,10 @@ ENABLE_L7_LOADBALANCING="${KUBE_ENABLE_L7_LOADBALANCING:-glbc}"
 #   standalone     - Heapster only. Metrics available via Heapster REST API.
 ENABLE_CLUSTER_MONITORING="${KUBE_ENABLE_CLUSTER_MONITORING:-influxdb}"
 
+# One special node out of NUM_NODES would be created of this type if specified.
+# Useful for scheduling heapster in large clusters with nodes of small size.
+HEAPSTER_MACHINE_TYPE="${HEAPSTER_MACHINE_TYPE:-}"
+
 # Set etcd image (e.g. 3.0.17-alpha.1) and version (e.g. 3.0.17) if you need
 # non-default version.
 ETCD_IMAGE="${TEST_ETCD_IMAGE:-}"
@@ -149,10 +159,10 @@ TEST_CLUSTER_RESYNC_PERIOD="${TEST_CLUSTER_RESYNC_PERIOD:---min-resync-period=3m
 TEST_CLUSTER_API_CONTENT_TYPE="${TEST_CLUSTER_API_CONTENT_TYPE:-}"
 
 KUBELET_TEST_ARGS="${KUBELET_TEST_ARGS:-} --max-pods=110 --serialize-image-pulls=false --outofdisk-transition-frequency=0 ${TEST_CLUSTER_API_CONTENT_TYPE}"
-if [[ "${NODE_OS_DISTRIBUTION}" == "gci" ]]; then
+if [[ "${NODE_OS_DISTRIBUTION}" == "gci" ]] || [[ "${NODE_OS_DISTRIBUTION}" == "ubuntu" ]]; then
   NODE_KUBELET_TEST_ARGS=" --experimental-kernel-memcg-notification=true"
 fi
-if [[ "${MASTER_OS_DISTRIBUTION}" == "gci" ]]; then
+if [[ "${MASTER_OS_DISTRIBUTION}" == "gci" ]] || [[ "${MASTER_OS_DISTRIBUTION}" == "ubuntu" ]]; then
   MASTER_KUBELET_TEST_ARGS=" --experimental-kernel-memcg-notification=true"
 fi
 APISERVER_TEST_ARGS="${APISERVER_TEST_ARGS:-} --runtime-config=extensions/v1beta1 ${TEST_CLUSTER_DELETE_COLLECTION_WORKERS} ${TEST_CLUSTER_MAX_REQUESTS_INFLIGHT}"
@@ -171,6 +181,12 @@ NODE_LABELS="${KUBE_NODE_LABELS:-beta.kubernetes.io/fluentd-ds-ready=true}"
 # label each Node so that the DaemonSet can run the Pods only on ready Nodes.
 if [[ ${NETWORK_POLICY_PROVIDER:-} == "calico" ]]; then
 	NODE_LABELS="$NODE_LABELS,projectcalico.org/ds-ready=true"
+fi
+
+# Turn the simple metadata proxy on by default.
+ENABLE_METADATA_PROXY="${ENABLE_METADATA_PROXY:-simple}"
+if [[ ${ENABLE_METADATA_PROXY} != "false" ]]; then
+        NODE_LABELS="${NODE_LABELS},beta.kubernetes.io/metadata-proxy-ready=true"
 fi
 
 # Optional: Enable node logging.
@@ -213,6 +229,8 @@ if [[ "${NODE_OS_DISTRIBUTION}" == "gci" ]]; then
 else
   ENABLE_NODE_PROBLEM_DETECTOR="${KUBE_ENABLE_NODE_PROBLEM_DETECTOR:-daemonset}"
 fi
+NODE_PROBLEM_DETECTOR_VERSION="${NODE_PROBLEM_DETECTOR_VERSION:-}"
+NODE_PROBLEM_DETECTOR_TAR_HASH="${NODE_PROBLEM_DETECTOR_TAR_HASH:-}"
 
 # Optional: Create autoscaler for cluster's nodes.
 ENABLE_CLUSTER_AUTOSCALER="${KUBE_ENABLE_CLUSTER_AUTOSCALER:-false}"
@@ -220,6 +238,7 @@ if [[ "${ENABLE_CLUSTER_AUTOSCALER}" == "true" ]]; then
   AUTOSCALER_MIN_NODES="${KUBE_AUTOSCALER_MIN_NODES:-}"
   AUTOSCALER_MAX_NODES="${KUBE_AUTOSCALER_MAX_NODES:-}"
   AUTOSCALER_ENABLE_SCALE_DOWN="${KUBE_AUTOSCALER_ENABLE_SCALE_DOWN:-false}"
+  AUTOSCALER_EXPANDER_CONFIG="${KUBE_AUTOSCALER_EXPANDER_CONFIG:---expander=price}"
 fi
 
 # Optional: Enable Rescheduler
@@ -247,7 +266,7 @@ if [ ${ENABLE_IP_ALIASES} = true ]; then
 fi
 
 # If we included ResourceQuota, we should keep it at the end of the list to prevent incrementing quota usage prematurely.
-ADMISSION_CONTROL="${KUBE_ADMISSION_CONTROL:-NamespaceLifecycle,LimitRanger,ServiceAccount,PersistentVolumeLabel,PodPreset,DefaultStorageClass,DefaultTolerationSeconds,ResourceQuota}"
+ADMISSION_CONTROL="${KUBE_ADMISSION_CONTROL:-Initializers,NamespaceLifecycle,LimitRanger,ServiceAccount,PersistentVolumeLabel,PodPreset,DefaultStorageClass,DefaultTolerationSeconds,NodeRestriction,ResourceQuota}"
 
 # Optional: if set to true kube-up will automatically check for existing resources and clean them up.
 KUBE_UP_AUTOMATIC_CLEANUP=${KUBE_UP_AUTOMATIC_CLEANUP:-false}
@@ -299,3 +318,11 @@ ENABLE_LEGACY_ABAC="${ENABLE_LEGACY_ABAC:-false}" # true, false
 # TODO(dawn1107): Remove this once the flag is built into CVM image.
 # Kernel panic upon soft lockup issue
 SOFTLOCKUP_PANIC="${SOFTLOCKUP_PANIC:-true}" # true, false
+
+# Enable a simple "AdvancedAuditing" setup for testing.
+ENABLE_APISERVER_ADVANCED_AUDIT="${ENABLE_APISERVER_ADVANCED_AUDIT:-true}" # true, false
+if [[ "${ENABLE_APISERVER_ADVANCED_AUDIT}" == "true" ]]; then
+  FEATURE_GATES="${FEATURE_GATES},AdvancedAuditing=true"
+fi
+
+ENABLE_BIG_CLUSTER_SUBNETS="${ENABLE_BIG_CLUSTER_SUBNETS:-false}"

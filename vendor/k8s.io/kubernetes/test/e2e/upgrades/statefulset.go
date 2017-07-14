@@ -20,8 +20,8 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	"k8s.io/kubernetes/pkg/api/v1"
-	apps "k8s.io/kubernetes/pkg/apis/apps/v1beta1"
+	apps "k8s.io/api/apps/v1beta1"
+	"k8s.io/api/core/v1"
 	"k8s.io/kubernetes/pkg/util/version"
 
 	"k8s.io/kubernetes/test/e2e/framework"
@@ -34,7 +34,7 @@ type StatefulSetUpgradeTest struct {
 	set     *apps.StatefulSet
 }
 
-func (StatefulSetUpgradeTest) Name() string { return "statefulset-upgrade" }
+func (StatefulSetUpgradeTest) Name() string { return "[sig-apps] statefulset-upgrade" }
 
 func (StatefulSetUpgradeTest) Skip(upgCtx UpgradeContext) bool {
 	minVersion := version.MustParseSemantic("1.5.0")

@@ -44,8 +44,8 @@ import (
 	"k8s.io/kubernetes/pkg/kubectl"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
+	"k8s.io/kubernetes/pkg/kubectl/util/crlf"
 	"k8s.io/kubernetes/pkg/printers"
-	"k8s.io/kubernetes/pkg/util/crlf"
 )
 
 // EditOptions contains all the options for running edit cli command.
@@ -104,7 +104,11 @@ func (o *EditOptions) Complete(f cmdutil.Factory, out, errOut io.Writer, args []
 	if err != nil {
 		return err
 	}
-	b := resource.NewBuilder(mapper, f.CategoryExpander(), typer, resource.ClientMapperFunc(f.UnstructuredClientForMapping), unstructured.UnstructuredJSONScheme)
+
+	b, err := f.NewUnstructuredBuilder(true)
+	if err != nil {
+		return err
+	}
 	if o.EditMode == NormalEditMode || o.EditMode == ApplyEditMode {
 		// when do normal edit or apply edit we need to always retrieve the latest resource from server
 		b = b.ResourceTypeOrNameArgs(true, args...).Latest()

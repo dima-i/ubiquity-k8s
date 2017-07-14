@@ -22,11 +22,11 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
+	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/kubernetes/pkg/api/v1"
 	utilstrings "k8s.io/kubernetes/pkg/util/strings"
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/configmap"
@@ -177,11 +177,11 @@ func (s *projectedVolumeMounter) CanMount() error {
 	return nil
 }
 
-func (s *projectedVolumeMounter) SetUp(fsGroup *types.UnixGroupID) error {
+func (s *projectedVolumeMounter) SetUp(fsGroup *int64) error {
 	return s.SetUpAt(s.GetPath(), fsGroup)
 }
 
-func (s *projectedVolumeMounter) SetUpAt(dir string, fsGroup *types.UnixGroupID) error {
+func (s *projectedVolumeMounter) SetUpAt(dir string, fsGroup *int64) error {
 	glog.V(3).Infof("Setting up volume %v for pod %v at %v", s.volName, s.pod.UID, dir)
 
 	wrapped, err := s.plugin.host.NewWrapperMounter(s.volName, wrappedVolumeSpec(), s.pod, *s.opts)
@@ -195,6 +195,7 @@ func (s *projectedVolumeMounter) SetUpAt(dir string, fsGroup *types.UnixGroupID)
 	data, err := s.collectData()
 	if err != nil {
 		glog.Errorf("Error preparing data for projected volume %v for pod %v/%v: %s", s.volName, s.pod.Namespace, s.pod.Name, err.Error())
+		return err
 	}
 
 	writerContext := fmt.Sprintf("pod %v/%v volume %v", s.pod.Namespace, s.pod.Name, s.volName)

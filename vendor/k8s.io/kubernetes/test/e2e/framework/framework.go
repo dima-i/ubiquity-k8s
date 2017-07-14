@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -40,10 +41,9 @@ import (
 	clientreporestclient "k8s.io/client-go/rest"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/kubernetes/pkg/metrics"
+	"k8s.io/kubernetes/test/e2e/metrics"
 	testutils "k8s.io/kubernetes/test/utils"
 
 	. "github.com/onsi/ginkgo"
@@ -51,8 +51,10 @@ import (
 )
 
 const (
-	maxKubectlExecRetries           = 5
-	DefaultNamespaceDeletionTimeout = 5 * time.Minute
+	maxKubectlExecRetries = 5
+	// TODO(mikedanese): reset this to 5 minutes once #47135 is resolved.
+	// ref https://github.com/kubernetes/kubernetes/issues/47135
+	DefaultNamespaceDeletionTimeout = 10 * time.Minute
 )
 
 // Framework supports common operations used by e2e tests; it will keep a client & a namespace for you.

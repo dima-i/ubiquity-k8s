@@ -23,10 +23,10 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/test/e2e/framework"
 )
@@ -97,7 +97,7 @@ func initNFSserverPod(c clientset.Interface, ns string) *v1.Pod {
 	})
 }
 
-var _ = framework.KubeDescribe("PersistentVolumes", func() {
+var _ = SIGDescribe("PersistentVolumes", func() {
 
 	// global vars for the Context()s and It()'s below
 	f := framework.NewDefaultFramework("pv")
@@ -123,7 +123,7 @@ var _ = framework.KubeDescribe("PersistentVolumes", func() {
 
 	// Testing configurations of a single a PV/PVC pair, multiple evenly paired PVs/PVCs,
 	// and multiple unevenly paired PV/PVCs
-	framework.KubeDescribe("PersistentVolumes:NFS", func() {
+	SIGDescribe("PersistentVolumes:NFS", func() {
 
 		var (
 			nfsServerPod *v1.Pod
@@ -218,10 +218,6 @@ var _ = framework.KubeDescribe("PersistentVolumes", func() {
 		//   a) pre-binding, b) create pvcs before pvs, c) create pvcs and pods
 		//   in different namespaces.
 		Context("with multiple PVs and PVCs all in same ns", func() {
-
-			// define the maximum number of PVs and PVCs supported by these tests
-			const maxNumPVs = 10
-			const maxNumPVCs = 10
 			// scope the pv and pvc maps to be available in the AfterEach
 			// note: these maps are created fresh in CreatePVsPVCs()
 			var pvols framework.PVMap
@@ -261,7 +257,7 @@ var _ = framework.KubeDescribe("PersistentVolumes", func() {
 
 			// Create 4 PVs and 2 PVCs.
 			// Note: PVs are created before claims and no pre-binding.
-			It("should create 4 PVs and 2 PVCs: test write access", func() {
+			It("should create 4 PVs and 2 PVCs: test write access [Slow]", func() {
 				numPVs, numPVCs := 4, 2
 				pvols, claims, err = framework.CreatePVsPVCs(numPVs, numPVCs, c, ns, pvConfig, pvcConfig)
 				Expect(err).NotTo(HaveOccurred())
@@ -291,7 +287,7 @@ var _ = framework.KubeDescribe("PersistentVolumes", func() {
 			// This It() tests a scenario where a PV is written to by a Pod, recycled, then the volume checked
 			// for files. If files are found, the checking Pod fails, failing the test.  Otherwise, the pod
 			// (and test) succeed.
-			It("should test that a PV becomes Available and is clean after the PVC is deleted. [Volume]", func() {
+			It("should test that a PV becomes Available and is clean after the PVC is deleted.", func() {
 				By("Writing to the volume.")
 				pod := framework.MakeWritePod(ns, pvc)
 				pod, err = c.CoreV1().Pods(ns).Create(pod)

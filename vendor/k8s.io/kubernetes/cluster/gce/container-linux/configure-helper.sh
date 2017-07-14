@@ -34,6 +34,54 @@ function create-dirs {
   fi
 }
 
+# Vars assumed:
+#   NUM_NODES
+function get-calico-node-cpu {
+  local suggested_calico_cpus=100m
+  if [[ "${NUM_NODES}" -gt "10" ]]; then
+    suggested_calico_cpus=250m
+  fi
+  if [[ "${NUM_NODES}" -gt "100" ]]; then
+    suggested_calico_cpus=500m
+  fi
+  if [[ "${NUM_NODES}" -gt "500" ]]; then
+    suggested_calico_cpus=1000m
+  fi
+  echo "${suggested_calico_cpus}"
+}
+
+# Vars assumed:
+#    NUM_NODES
+function get-calico-typha-replicas {
+  local typha_count=1
+  if [[ "${NUM_NODES}" -gt "10" ]]; then
+    typha_count=2
+  fi
+  if [[ "${NUM_NODES}" -gt "100" ]]; then
+    typha_count=3
+  fi
+  if [[ "${NUM_NODES}" -gt "250" ]]; then
+    typha_count=4
+  fi
+  if [[ "${NUM_NODES}" -gt "500" ]]; then
+    typha_count=5
+  fi
+  echo "${typha_count}"
+}
+
+# Vars assumed:
+#    NUM_NODES
+function get-calico-typha-cpu {
+  local typha_cpu=200m
+  if [[ "${NUM_NODES}" -gt "10" ]]; then
+    typha_cpu=500m
+  fi
+  if [[ "${NUM_NODES}" -gt "100" ]]; then
+    typha_cpu=1000m
+  fi
+  echo "${typha_cpu}"
+}
+
 # Create directories referenced in the kube-controller-manager manifest for
 # bindmounts. This is used under the rkt runtime to work around
 # https://github.com/kubernetes/kubernetes/issues/26816
@@ -176,6 +224,11 @@ function create-master-auth {
   cat <<EOF >/etc/gce.conf
 [global]
 EOF
+  if [[ -n "${GCE_API_ENDPOINT:-}" ]]; then
+    cat <<EOF >>/etc/gce.conf
+api-endpoint = ${GCE_API_ENDPOINT}
+EOF
+  fi
   if [[ -n "${PROJECT_ID:-}" && -n "${TOKEN_URL:-}" && -n "${TOKEN_BODY:-}" && -n "${NODE_NETWORK:-}" ]]; then
     use_cloud_config="true"
     cat <<EOF >>/etc/gce.conf
@@ -184,6 +237,11 @@ token-body = ${TOKEN_BODY}
 project-id = ${PROJECT_ID}
 network-name = ${NODE_NETWORK}
 EOF
+    if [[ -n "${NETWORK_PROJECT_ID:-}" ]]; then
+      cat <<EOF >>/etc/gce.conf
+network-project-id = ${NETWORK_PROJECT_ID}
+EOF
+    fi
     if [[ -n "${NODE_SUBNETWORK:-}" ]]; then
       cat <<EOF >>/etc/gce.conf
 subnetwork-name = ${NODE_SUBNETWORK}
@@ -535,11 +593,7 @@ function start-kubelet {
   fi
   # Network plugin
   if [[ -n "${NETWORK_PROVIDER:-}" ]]; then
-    if [[ "${NETWORK_PROVIDER:-}" == "cni" ]]; then
-      flags+=" --cni-bin-dir=/opt/kubernetes/bin"
-    else
-      flags+=" --network-plugin-dir=/opt/kubernetes/bin"
-    fi
+    flags+=" --cni-bin-dir=/opt/kubernetes/bin"
     flags+=" --network-plugin=${NETWORK_PROVIDER}"
   fi
   if [[ -n "${NON_MASQUERADE_CIDR:-}" ]]; then
@@ -554,6 +608,9 @@ function start-kubelet {
   fi
   if [[ -n "${NODE_LABELS:-}" ]]; then
     flags+=" --node-labels=${NODE_LABELS}"
+  fi
+  if [[ -n "${NODE_TAINTS:-}" ]]; then
+    flags+=" --register-with-taints=${NODE_TAINTS}"
   fi
   if [[ -n "${EVICTION_HARD:-}" ]]; then
     flags+=" --eviction-hard=${EVICTION_HARD}"
@@ -936,7 +993,16 @@ function start-kube-apiserver {
 
   local container_env=""
   if [[ -n "${ENABLE_CACHE_MUTATION_DETECTOR:-}" ]]; then
-    container_env="\"env\":[{\"name\": \"KUBE_CACHE_MUTATION_DETECTOR\", \"value\": \"${ENABLE_CACHE_MUTATION_DETECTOR}\"}],"
+    container_env="\"name\": \"KUBE_CACHE_MUTATION_DETECTOR\", \"value\": \"${ENABLE_CACHE_MUTATION_DETECTOR}\""
+  fi
+  if [[ -n "${ENABLE_PATCH_CONVERSION_DETECTOR:-}" ]]; then
+    if [[ -n "${container_env}" ]]; then
+      container_env="${container_env}, "
+    fi
+    container_env="\"name\": \"KUBE_PATCH_CONVERSION_DETECTOR\", \"value\": \"${ENABLE_PATCH_CONVERSION_DETECTOR}\""
+  fi
+  if [[ -n "${container_env}" ]]; then
+    container_env="\"env\":[{${container_env}}],"
   fi
 
   src_file="${src_dir}/kube-apiserver.manifest"
@@ -1082,7 +1148,7 @@ function start-cluster-autoscaler {
     local -r src_file="${KUBE_HOME}/kube-manifests/kubernetes/gci-trusty/cluster-autoscaler.manifest"
     remove-salt-config-comments "${src_file}"
 
-    local params="${AUTOSCALER_MIG_CONFIG} ${CLOUD_CONFIG_OPT}"
+    local params="${AUTOSCALER_MIG_CONFIG} ${CLOUD_CONFIG_OPT} ${AUTOSCALER_EXPANDER_CONFIG:-}"
     sed -i -e "s@{{params}}@${params}@g" "${src_file}"
     sed -i -e "s@{{cloud_config_mount}}@${CLOUD_CONFIG_MOUNT}@g" "${src_file}"
     sed -i -e "s@{{cloud_config_volume}}@${CLOUD_CONFIG_VOLUME}@g" "${src_file}"
@@ -1121,13 +1187,15 @@ function setup-addon-manifests {
 }
 
 # Prepares the manifests of k8s addons, and starts the addon manager.
+# Vars assumed:
+#   CLUSTER_NAME
 function start-kube-addons {
   echo "Prepare kube-addons manifests and start kube addon manager"
   local -r src_dir="${KUBE_HOME}/kube-manifests/kubernetes/gci-trusty"
   local -r dst_dir="/etc/kubernetes/addons"
 
-  # prep the additional bindings that are particular to e2e users and groups
-  setup-addon-manifests "addons" "e2e-rbac-bindings"
+  # prep addition kube-up specific rbac objects
+  setup-addon-manifests "addons" "rbac"
 
   # Set up manifests of other addons.
   if [[ "${ENABLE_CLUSTER_MONITORING:-}" == "influxdb" ]] || \
@@ -1136,6 +1204,7 @@ function start-kube-addons {
      [[ "${ENABLE_CLUSTER_MONITORING:-}" == "standalone" ]] || \
      [[ "${ENABLE_CLUSTER_MONITORING:-}" == "googleinfluxdb" ]]; then
     local -r file_dir="cluster-monitoring/${ENABLE_CLUSTER_MONITORING}"
+    setup-addon-manifests "addons" "cluster-monitoring"
     setup-addon-manifests "addons" "${file_dir}"
     # Replace the salt configurations with variable values.
     base_metrics_memory="140Mi"
@@ -1157,6 +1226,7 @@ function start-kube-addons {
       controller_yaml="${controller_yaml}/heapster-controller.yaml"
     fi
     remove-salt-config-comments "${controller_yaml}"
+    sed -i -e "s@{{ cluster_name }}@${CLUSTER_NAME}@g" "${controller_yaml}"
     sed -i -e "s@{{ *base_metrics_memory *}}@${base_metrics_memory}@g" "${controller_yaml}"
     sed -i -e "s@{{ *base_metrics_cpu *}}@${base_metrics_cpu}@g" "${controller_yaml}"
     sed -i -e "s@{{ *base_eventer_memory *}}@${base_eventer_memory}@g" "${controller_yaml}"
@@ -1212,9 +1282,20 @@ function start-kube-addons {
   if [[ "${NETWORK_POLICY_PROVIDER:-}" == "calico" ]]; then
     setup-addon-manifests "addons" "calico-policy-controller"
 
-    # Replace the cluster cidr.
-    local -r calico_file="${dst_dir}/calico-policy-controller/calico-node.yaml"
-    sed -i -e "s@__CLUSTER_CIDR__@${CLUSTER_IP_RANGE}@g" "${calico_file}"
+    # Configure Calico based on cluster size and image type. 
+    local -r ds_file="${dst_dir}/calico-policy-controller/calico-node-daemonset.yaml"
+    local -r typha_dep_file="${dst_dir}/calico-policy-controller/typha-deployment.yaml"
+    sed -i -e "s@__CALICO_CNI_DIR__@/opt/cni/bin@g" "${ds_file}"
+    sed -i -e "s@__CALICO_NODE_CPU__@$(get-calico-node-cpu)@g" "${ds_file}"
+    sed -i -e "s@__CALICO_TYPHA_CPU__@$(get-calico-typha-cpu)@g" "${typha_dep_file}"
+    sed -i -e "s@__CALICO_TYPHA_REPLICAS__@$(get-calico-typha-replicas)@g" "${typha_dep_file}"
+  else
+    # If not configured to use Calico, the set the typha replica count to 0, but only if the 
+    # addon is present.
+    local -r typha_dep_file="${dst_dir}/calico-policy-controller/typha-deployment.yaml"
+    if [[ -e $typha_dep_file ]]; then
+      sed -i -e "s@__CALICO_TYPHA_REPLICAS__@0@g" "${typha_dep_file}"
+    fi
   fi
   if [[ "${ENABLE_DEFAULT_STORAGE_CLASS:-}" == "true" ]]; then
     setup-addon-manifests "addons" "storage-class/gce"

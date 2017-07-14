@@ -21,8 +21,8 @@ package app
 import (
 	"time"
 
+	clientv1 "k8s.io/api/core/v1"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
-	clientv1 "k8s.io/client-go/pkg/api/v1"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/record"
@@ -87,6 +87,6 @@ func Run(s *GKECertificatesController) error {
 	}
 
 	sharedInformers.Start(nil)
-	controller.Run(1, nil) // runs forever
-	return nil
+	controller.Run(5, nil) // runs forever
+	panic("unreachable")
 }

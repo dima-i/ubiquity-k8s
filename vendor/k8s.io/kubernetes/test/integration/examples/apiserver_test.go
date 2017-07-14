@@ -112,13 +112,17 @@ func TestAggregatedAPIServer(t *testing.T) {
 			kubeAPIServerOptions.Authentication.ClientCert.ClientCA = clientCACertFile.Name()
 			kubeAPIServerOptions.Authorization.Mode = "RBAC"
 
-			kubeAPIServerConfig, sharedInformers, _, err := app.CreateKubeAPIServerConfig(kubeAPIServerOptions)
+			tunneler, proxyTransport, err := app.CreateNodeDialer(kubeAPIServerOptions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			kubeAPIServerConfig, sharedInformers, _, _, _, err := app.CreateKubeAPIServerConfig(kubeAPIServerOptions, tunneler, proxyTransport)
 			if err != nil {
 				t.Fatal(err)
 			}
 			kubeClientConfigValue.Store(kubeAPIServerConfig.GenericConfig.LoopbackClientConfig)
 
-			kubeAPIServer, err := app.CreateKubeAPIServer(kubeAPIServerConfig, genericapiserver.EmptyDelegate, sharedInformers, nil)
+			kubeAPIServer, err := app.CreateKubeAPIServer(kubeAPIServerConfig, genericapiserver.EmptyDelegate, sharedInformers)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -311,10 +315,11 @@ func TestAggregatedAPIServer(t *testing.T) {
 				Namespace: "kube-wardle",
 				Name:      "api",
 			},
-			Group:    "wardle.k8s.io",
-			Version:  "v1alpha1",
-			CABundle: wardleCA,
-			Priority: 200,
+			Group:                "wardle.k8s.io",
+			Version:              "v1alpha1",
+			CABundle:             wardleCA,
+			GroupPriorityMinimum: 200,
+			VersionPriority:      200,
 		},
 	})
 	if err != nil {
@@ -333,9 +338,10 @@ func TestAggregatedAPIServer(t *testing.T) {
 		Spec: apiregistrationv1beta1.APIServiceSpec{
 			// register this as a loca service so it doesn't try to lookup the default kubernetes service
 			// which will have an unroutable IP address since its fake.
-			Group:    "",
-			Version:  "v1",
-			Priority: 100,
+			Group:                "",
+			Version:              "v1",
+			GroupPriorityMinimum: 100,
+			VersionPriority:      100,
 		},
 	})
 	if err != nil {
@@ -442,9 +448,11 @@ func testAPIResourceList(t *testing.T, client rest.Interface) {
 		t.Fatalf("Error in unmarshalling response from server %s: %v", "/apis/wardle.k8s.io/v1alpha1", err)
 	}
 	assert.Equal(t, groupVersion.String(), apiResourceList.GroupVersion)
-	assert.Equal(t, 1, len(apiResourceList.APIResources))
-	assert.Equal(t, "flunders", apiResourceList.APIResources[0].Name)
-	assert.True(t, apiResourceList.APIResources[0].Namespaced)
+	assert.Equal(t, 2, len(apiResourceList.APIResources))
+	assert.Equal(t, "fischers", apiResourceList.APIResources[0].Name)
+	assert.False(t, apiResourceList.APIResources[0].Namespaced)
+	assert.Equal(t, "flunders", apiResourceList.APIResources[1].Name)
+	assert.True(t, apiResourceList.APIResources[1].Namespaced)
 }
 
 const (

@@ -24,6 +24,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/api/core/v1"
+	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -33,7 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/retry"
@@ -172,6 +174,31 @@ func (j *ServiceTestJig) CreateUDPServiceOrFail(namespace string, tweak func(svc
 	result, err := j.Client.Core().Services(namespace).Create(svc)
 	if err != nil {
 		Failf("Failed to create UDP Service %q: %v", svc.Name, err)
+	}
+	return result
+}
+
+// CreateExternalNameServiceOrFail creates a new ExternalName type Service based on the jig's defaults.
+// Callers can provide a function to tweak the Service object before it is created.
+func (j *ServiceTestJig) CreateExternalNameServiceOrFail(namespace string, tweak func(svc *v1.Service)) *v1.Service {
+	svc := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      j.Name,
+			Labels:    j.Labels,
+		},
+		Spec: v1.ServiceSpec{
+			Selector:     j.Labels,
+			ExternalName: "foo.example.com",
+			Type:         v1.ServiceTypeExternalName,
+		},
+	}
+	if tweak != nil {
+		tweak(svc)
+	}
+	result, err := j.Client.Core().Services(namespace).Create(svc)
+	if err != nil {
+		Failf("Failed to create ExternalName Service %q: %v", svc.Name, err)
 	}
 	return result
 }
@@ -372,8 +399,22 @@ func (j *ServiceTestJig) SanityCheckService(svc *v1.Service, svcType v1.ServiceT
 	if svc.Spec.Type != svcType {
 		Failf("unexpected Spec.Type (%s) for service, expected %s", svc.Spec.Type, svcType)
 	}
+
+	if svcType != v1.ServiceTypeExternalName {
+		if svc.Spec.ExternalName != "" {
+			Failf("unexpected Spec.ExternalName (%s) for service, expected empty", svc.Spec.ExternalName)
+		}
+		if svc.Spec.ClusterIP != api.ClusterIPNone && svc.Spec.ClusterIP == "" {
+			Failf("didn't get ClusterIP for non-ExternamName service")
+		}
+	} else {
+		if svc.Spec.ClusterIP != "" {
+			Failf("unexpected Spec.ClusterIP (%s) for ExternamName service, expected empty", svc.Spec.ClusterIP)
+		}
+	}
+
 	expectNodePorts := false
-	if svcType != v1.ServiceTypeClusterIP {
+	if svcType != v1.ServiceTypeClusterIP && svcType != v1.ServiceTypeExternalName {
 		expectNodePorts = true
 	}
 	for i, port := range svc.Spec.Ports {
@@ -510,6 +551,8 @@ func (j *ServiceTestJig) WaitForLoadBalancerDestroyOrFail(namespace, name string
 // this jig, but does not actually create the RC.  The default RC has the same
 // name as the jig and runs the "netexec" container.
 func (j *ServiceTestJig) newRCTemplate(namespace string) *v1.ReplicationController {
+	var replicas int32 = 1
+
 	rc := &v1.ReplicationController{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace,
@@ -517,7 +560,7 @@ func (j *ServiceTestJig) newRCTemplate(namespace string) *v1.ReplicationControll
 			Labels:    j.Labels,
 		},
 		Spec: v1.ReplicationControllerSpec{
-			Replicas: func(i int) *int32 { x := int32(i); return &x }(1),
+			Replicas: &replicas,
 			Selector: j.Labels,
 			Template: &v1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
@@ -548,6 +591,59 @@ func (j *ServiceTestJig) newRCTemplate(namespace string) *v1.ReplicationControll
 	return rc
 }
 
+func (j *ServiceTestJig) AddRCAntiAffinity(rc *v1.ReplicationController) {
+	var replicas int32 = 2
+
+	rc.Spec.Replicas = &replicas
+	if rc.Spec.Template.Spec.Affinity == nil {
+		rc.Spec.Template.Spec.Affinity = &v1.Affinity{}
+	}
+	if rc.Spec.Template.Spec.Affinity.PodAntiAffinity == nil {
+		rc.Spec.Template.Spec.Affinity.PodAntiAffinity = &v1.PodAntiAffinity{}
+	}
+	rc.Spec.Template.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution = append(
+		rc.Spec.Template.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution,
+		v1.PodAffinityTerm{
+			LabelSelector: &metav1.LabelSelector{MatchLabels: j.Labels},
+			Namespaces:    nil,
+			TopologyKey:   "kubernetes.io/hostname",
+		})
+}
+
+func (j *ServiceTestJig) CreatePDBOrFail(namespace string, rc *v1.ReplicationController) *policyv1beta1.PodDisruptionBudget {
+	pdb := j.newPDBTemplate(namespace, rc)
+	newPdb, err := j.Client.Policy().PodDisruptionBudgets(namespace).Create(pdb)
+	if err != nil {
+		Failf("Failed to create PDB %q %v", pdb.Name, err)
+	}
+	if err := j.waitForPdbReady(namespace); err != nil {
+		Failf("Failed waiting for PDB to be ready: %v", err)
+	}
+
+	return newPdb
+}
+
+// newPDBTemplate returns the default policyv1beta1.PodDisruptionBudget object for
+// this jig, but does not actually create the PDB.  The default PDB specifies a
+// MinAvailable of N-1 and matches the pods created by the RC.
+func (j *ServiceTestJig) newPDBTemplate(namespace string, rc *v1.ReplicationController) *policyv1beta1.PodDisruptionBudget {
+	minAvailable := intstr.FromInt(int(*rc.Spec.Replicas) - 1)
+
+	pdb := &policyv1beta1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      j.Name,
+			Labels:    j.Labels,
+		},
+		Spec: policyv1beta1.PodDisruptionBudgetSpec{
+			MinAvailable: &minAvailable,
+			Selector:     &metav1.LabelSelector{MatchLabels: j.Labels},
+		},
+	}
+
+	return pdb
+}
+
 // RunOrFail creates a ReplicationController and Pod(s) and waits for the
 // Pod(s) to be running. Callers can provide a function to tweak the RC object
 // before it is created.
@@ -558,7 +654,7 @@ func (j *ServiceTestJig) RunOrFail(namespace string, tweak func(rc *v1.Replicati
 	}
 	result, err := j.Client.Core().ReplicationControllers(namespace).Create(rc)
 	if err != nil {
-		Failf("Failed to created RC %q: %v", rc.Name, err)
+		Failf("Failed to create RC %q: %v", rc.Name, err)
 	}
 	pods, err := j.waitForPodsCreated(namespace, int(*(rc.Spec.Replicas)))
 	if err != nil {
@@ -568,6 +664,21 @@ func (j *ServiceTestJig) RunOrFail(namespace string, tweak func(rc *v1.Replicati
 		Failf("Failed waiting for pods to be running: %v", err)
 	}
 	return result
+}
+
+func (j *ServiceTestJig) waitForPdbReady(namespace string) error {
+	timeout := 2 * time.Minute
+	for start := time.Now(); time.Since(start) < timeout; time.Sleep(2 * time.Second) {
+		pdb, err := j.Client.Policy().PodDisruptionBudgets(namespace).Get(j.Name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if pdb.Status.PodDisruptionsAllowed > 0 {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("Timeout waiting for PDB %q to be ready", j.Name)
 }
 
 func (j *ServiceTestJig) waitForPodsCreated(namespace string, replicas int) ([]string, error) {
@@ -663,7 +774,7 @@ func newEchoServerPodSpec(podName string) *v1.Pod {
 			Containers: []v1.Container{
 				{
 					Name:  "echoserver",
-					Image: "gcr.io/google_containers/echoserver:1.4",
+					Image: "gcr.io/google_containers/echoserver:1.6",
 					Ports: []v1.ContainerPort{{ContainerPort: int32(port)}},
 				},
 			},
@@ -1229,9 +1340,17 @@ func VerifyServeHostnameServiceDown(c clientset.Interface, host string, serviceI
 	return fmt.Errorf("waiting for service to be down timed out")
 }
 
-func CleanupServiceGCEResources(loadBalancerName string) {
+func CleanupServiceResources(c clientset.Interface, loadBalancerName, zone string) {
+	if TestContext.Provider == "gce" || TestContext.Provider == "gke" {
+		CleanupServiceGCEResources(c, loadBalancerName, zone)
+	}
+
+	// TODO: we need to add this function with other cloud providers, if there is a need.
+}
+
+func CleanupServiceGCEResources(c clientset.Interface, loadBalancerName, zone string) {
 	if pollErr := wait.Poll(5*time.Second, LoadBalancerCleanupTimeout, func() (bool, error) {
-		if err := CleanupGCEResources(loadBalancerName); err != nil {
+		if err := CleanupGCEResources(c, loadBalancerName, zone); err != nil {
 			Logf("Still waiting for glbc to cleanup: %v", err)
 			return false, nil
 		}
@@ -1246,4 +1365,27 @@ func DescribeSvc(ns string) {
 	desc, _ := RunKubectl(
 		"describe", "svc", fmt.Sprintf("--namespace=%v", ns))
 	Logf(desc)
+}
+
+func CreateServiceSpec(serviceName, externalName string, isHeadless bool, selector map[string]string) *v1.Service {
+	headlessService := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: serviceName,
+		},
+		Spec: v1.ServiceSpec{
+			Selector: selector,
+		},
+	}
+	if externalName != "" {
+		headlessService.Spec.Type = v1.ServiceTypeExternalName
+		headlessService.Spec.ExternalName = externalName
+	} else {
+		headlessService.Spec.Ports = []v1.ServicePort{
+			{Port: 80, Name: "http", Protocol: "TCP"},
+		}
+	}
+	if isHeadless {
+		headlessService.Spec.ClusterIP = "None"
+	}
+	return headlessService
 }

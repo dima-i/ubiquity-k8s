@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/kubernetes/pkg/api"
@@ -91,7 +92,7 @@ func (c *nodePlugin) Admit(a admission.Attributes) error {
 
 	if len(nodeName) == 0 {
 		// disallow requests we cannot match to a particular node
-		return admission.NewForbidden(a, fmt.Errorf("could not determine node from user %s", a.GetUserInfo().GetName()))
+		return admission.NewForbidden(a, fmt.Errorf("could not determine node from user %q", a.GetUserInfo().GetName()))
 	}
 
 	switch a.GetResource().GroupResource() {
@@ -102,7 +103,7 @@ func (c *nodePlugin) Admit(a admission.Attributes) error {
 		case "status":
 			return c.admitPodStatus(nodeName, a)
 		default:
-			return admission.NewForbidden(a, fmt.Errorf("unexpected pod subresource %s", a.GetSubresource()))
+			return admission.NewForbidden(a, fmt.Errorf("unexpected pod subresource %q", a.GetSubresource()))
 		}
 
 	case nodeResource:
@@ -124,50 +125,54 @@ func (c *nodePlugin) admitPod(nodeName string, a admission.Attributes) error {
 
 		// only allow nodes to create mirror pods
 		if _, isMirrorPod := pod.Annotations[api.MirrorPodAnnotationKey]; !isMirrorPod {
-			return admission.NewForbidden(a, fmt.Errorf("pod does not have %q annotation, node %s can only create mirror pods", api.MirrorPodAnnotationKey, nodeName))
+			return admission.NewForbidden(a, fmt.Errorf("pod does not have %q annotation, node %q can only create mirror pods", api.MirrorPodAnnotationKey, nodeName))
 		}
 
 		// only allow nodes to create a pod bound to itself
 		if pod.Spec.NodeName != nodeName {
-			return admission.NewForbidden(a, fmt.Errorf("node %s can only create pods with spec.nodeName set to itself", nodeName))
+			return admission.NewForbidden(a, fmt.Errorf("node %q can only create pods with spec.nodeName set to itself", nodeName))
 		}
 
 		// don't allow a node to create a pod that references any other API objects
 		if pod.Spec.ServiceAccountName != "" {
-			return admission.NewForbidden(a, fmt.Errorf("node %s can not create pods that reference a service account", nodeName))
+			return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference a service account", nodeName))
 		}
 		hasSecrets := false
 		podutil.VisitPodSecretNames(pod, func(name string) (shouldContinue bool) { hasSecrets = true; return false })
 		if hasSecrets {
-			return admission.NewForbidden(a, fmt.Errorf("node %s can not create pods that reference secrets", nodeName))
+			return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference secrets", nodeName))
 		}
 		hasConfigMaps := false
 		podutil.VisitPodConfigmapNames(pod, func(name string) (shouldContinue bool) { hasConfigMaps = true; return false })
 		if hasConfigMaps {
-			return admission.NewForbidden(a, fmt.Errorf("node %s can not create pods that reference configmaps", nodeName))
+			return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference configmaps", nodeName))
 		}
 		for _, v := range pod.Spec.Volumes {
 			if v.PersistentVolumeClaim != nil {
-				return admission.NewForbidden(a, fmt.Errorf("node %s can not create pods that reference persistentvolumeclaims", nodeName))
+				return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference persistentvolumeclaims", nodeName))
 			}
 		}
 
 		return nil
 
 	case admission.Delete:
-		// get the existing pod
+		// get the existing pod from the server cache
 		existingPod, err := c.podsGetter.Pods(a.GetNamespace()).Get(a.GetName(), v1.GetOptions{ResourceVersion: "0"})
+		if errors.IsNotFound(err) {
+			// wasn't found in the server cache, do a live lookup before forbidding
+			existingPod, err = c.podsGetter.Pods(a.GetNamespace()).Get(a.GetName(), v1.GetOptions{})
+		}
 		if err != nil {
 			return admission.NewForbidden(a, err)
 		}
 		// only allow a node to delete a pod bound to itself
 		if existingPod.Spec.NodeName != nodeName {
-			return admission.NewForbidden(a, fmt.Errorf("node %s can only delete pods with spec.nodeName set to itself", nodeName))
+			return admission.NewForbidden(a, fmt.Errorf("node %q can only delete pods with spec.nodeName set to itself", nodeName))
 		}
 		return nil
 
 	default:
-		return admission.NewForbidden(a, fmt.Errorf("unexpected operation %s", a.GetOperation()))
+		return admission.NewForbidden(a, fmt.Errorf("unexpected operation %q", a.GetOperation()))
 	}
 }
 
@@ -181,12 +186,12 @@ func (c *nodePlugin) admitPodStatus(nodeName string, a admission.Attributes) err
 		}
 		// only allow a node to update status of a pod bound to itself
 		if pod.Spec.NodeName != nodeName {
-			return admission.NewForbidden(a, fmt.Errorf("node %s can only update pod status for pods with spec.nodeName set to itself", nodeName))
+			return admission.NewForbidden(a, fmt.Errorf("node %q can only update pod status for pods with spec.nodeName set to itself", nodeName))
 		}
 		return nil
 
 	default:
-		return admission.NewForbidden(a, fmt.Errorf("unexpected operation %s", a.GetOperation()))
+		return admission.NewForbidden(a, fmt.Errorf("unexpected operation %q", a.GetOperation()))
 	}
 }
 
@@ -203,7 +208,7 @@ func (c *nodePlugin) admitNode(nodeName string, a admission.Attributes) error {
 	}
 
 	if requestedName != nodeName {
-		return admission.NewForbidden(a, fmt.Errorf("node %s cannot modify node %s", nodeName, requestedName))
+		return admission.NewForbidden(a, fmt.Errorf("node %q cannot modify node %q", nodeName, requestedName))
 	}
 	return nil
 }

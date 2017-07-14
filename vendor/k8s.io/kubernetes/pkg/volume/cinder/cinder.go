@@ -23,10 +23,10 @@ import (
 	"path"
 
 	"github.com/golang/glog"
+	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/openstack"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/rackspace"
@@ -298,12 +298,12 @@ func (b *cinderVolumeMounter) CanMount() error {
 	return nil
 }
 
-func (b *cinderVolumeMounter) SetUp(fsGroup *types.UnixGroupID) error {
+func (b *cinderVolumeMounter) SetUp(fsGroup *int64) error {
 	return b.SetUpAt(b.GetPath(), fsGroup)
 }
 
 // SetUp bind mounts to the volume path.
-func (b *cinderVolumeMounter) SetUpAt(dir string, fsGroup *types.UnixGroupID) error {
+func (b *cinderVolumeMounter) SetUpAt(dir string, fsGroup *int64) error {
 	glog.V(5).Infof("Cinder SetUp %s to %s", b.pdName, dir)
 
 	b.plugin.volumeLocks.LockKey(b.pdName)
@@ -482,6 +482,10 @@ type cinderVolumeProvisioner struct {
 var _ volume.Provisioner = &cinderVolumeProvisioner{}
 
 func (c *cinderVolumeProvisioner) Provision() (*v1.PersistentVolume, error) {
+	if !volume.AccessModesContainedInAll(c.plugin.GetAccessModes(), c.options.PVC.Spec.AccessModes) {
+		return nil, fmt.Errorf("invalid AccessModes %v: only AccessModes %v are supported", c.options.PVC.Spec.AccessModes, c.plugin.GetAccessModes())
+	}
+
 	volumeID, sizeGB, labels, err := c.manager.CreateVolume(c)
 	if err != nil {
 		return nil, err

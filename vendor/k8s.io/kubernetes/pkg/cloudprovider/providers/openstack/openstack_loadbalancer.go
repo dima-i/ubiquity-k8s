@@ -39,8 +39,8 @@ import (
 	neutronports "github.com/gophercloud/gophercloud/openstack/networking/v2/ports"
 	"github.com/gophercloud/gophercloud/pagination"
 
+	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/api/v1/service"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 )
@@ -546,15 +546,6 @@ func (lbaas *LbaasV2) createLoadBalancer(service *v1.Service, name string) (*loa
 	return loadbalancer, nil
 }
 
-func stringInArray(x string, list []string) bool {
-	for _, y := range list {
-		if y == x {
-			return true
-		}
-	}
-	return false
-}
-
 func (lbaas *LbaasV2) GetLoadBalancer(clusterName string, service *v1.Service) (*v1.LoadBalancerStatus, bool, error) {
 	loadBalancerName := cloudprovider.GetLoadBalancerName(service)
 	loadbalancer, err := getLoadbalancerByName(lbaas.network, loadBalancerName)
@@ -620,7 +611,7 @@ func (lbaas *LbaasV2) EnsureLoadBalancer(clusterName string, apiService *v1.Serv
 		return nil, fmt.Errorf("Source range restrictions are not supported for openstack load balancers without managing security groups")
 	}
 
-	affinity := v1.ServiceAffinityNone
+	affinity := apiService.Spec.SessionAffinity
 	var persistence *v2pools.SessionPersistence
 	switch affinity {
 	case v1.ServiceAffinityNone:
@@ -763,9 +754,13 @@ func (lbaas *LbaasV2) EnsureLoadBalancer(clusterName string, apiService *v1.Serv
 			}
 			waitLoadbalancerActiveProvisioningStatus(lbaas.network, loadbalancer.ID)
 			monitorID = monitor.ID
+		} else if lbaas.opts.CreateMonitor == false {
+			glog.V(4).Infof("Do not create monitor for pool %s when create-monitor is false", pool.ID)
 		}
 
-		glog.V(4).Infof("Monitor for pool %s: %s", pool.ID, monitorID)
+		if monitorID != "" {
+			glog.V(4).Infof("Monitor for pool %s: %s", pool.ID, monitorID)
+		}
 	}
 
 	// All remaining listeners are obsolete, delete
@@ -1102,11 +1097,14 @@ func (lbaas *LbaasV2) EnsureLoadBalancerDeleted(clusterName string, service *v1.
 	var monitorIDs []string
 	for _, listener := range listenerList {
 		pool, err := getPoolByListenerID(lbaas.network, loadbalancer.ID, listener.ID)
-		if err != nil {
+		if err != nil && err != ErrNotFound {
 			return fmt.Errorf("Error getting pool for listener %s: %v", listener.ID, err)
 		}
 		poolIDs = append(poolIDs, pool.ID)
-		monitorIDs = append(monitorIDs, pool.MonitorID)
+		// If create-monitor of cloud-config is false, pool has not monitor.
+		if pool.MonitorID != "" {
+			monitorIDs = append(monitorIDs, pool.MonitorID)
+		}
 	}
 
 	// get all members associated with each poolIDs

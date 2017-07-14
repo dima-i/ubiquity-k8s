@@ -17,8 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/pkg/api/v1"
 )
 
 // +genclient=true
@@ -37,14 +37,14 @@ type NodeMetrics struct {
 	Window    metav1.Duration `json:"window" protobuf:"bytes,3,opt,name=window"`
 
 	// The memory usage is the memory working set.
-	Usage v1.ResourceList `json:"usage" protobuf:"bytes,4,rep,name=usage,casttype=k8s.io/client-go/pkg/api/v1.ResourceList,castkey=k8s.io/client-go/pkg/api/v1.ResourceName,castvalue=k8s.io/apimachinery/pkg/api/resource.Quantity"`
+	Usage v1.ResourceList `json:"usage" protobuf:"bytes,4,rep,name=usage,casttype=k8s.io/api/core/v1.ResourceList,castkey=k8s.io/api/core/v1.ResourceName,castvalue=k8s.io/apimachinery/pkg/api/resource.Quantity"`
 }
 
 // NodeMetricsList is a list of NodeMetrics.
 type NodeMetricsList struct {
 	metav1.TypeMeta `json:",inline"`
 	// Standard list metadata.
-	// More info: http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#types-kinds
+	// More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#types-kinds
 	metav1.ListMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
 
 	// List of node metrics.
@@ -73,7 +73,7 @@ type PodMetrics struct {
 type PodMetricsList struct {
 	metav1.TypeMeta `json:",inline"`
 	// Standard list metadata.
-	// More info: http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#types-kinds
+	// More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#types-kinds
 	metav1.ListMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
 
 	// List of pod metrics.
@@ -85,5 +85,5 @@ type ContainerMetrics struct {
 	// Container name corresponding to the one from pod.spec.containers.
 	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
 	// The memory usage is the memory working set.
-	Usage v1.ResourceList `json:"usage" protobuf:"bytes,2,rep,name=usage,casttype=k8s.io/client-go/pkg/api/v1.ResourceList,castkey=k8s.io/client-go/pkg/api/v1.ResourceName,castvalue=k8s.io/apimachinery/pkg/api/resource.Quantity"`
+	Usage v1.ResourceList `json:"usage" protobuf:"bytes,2,rep,name=usage,casttype=k8s.io/api/core/v1.ResourceList,castkey=k8s.io/api/core/v1.ResourceName,castvalue=k8s.io/apimachinery/pkg/api/resource.Quantity"`
 }

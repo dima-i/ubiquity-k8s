@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	clientv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -42,7 +43,6 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	clientgoclientset "k8s.io/client-go/kubernetes"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
-	clientv1 "k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/client-go/tools/record"
@@ -53,6 +53,7 @@ import (
 	informers "k8s.io/kubernetes/pkg/client/informers/informers_generated/internalversion"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubelet/qos"
+	"k8s.io/kubernetes/pkg/master/ports"
 	"k8s.io/kubernetes/pkg/proxy"
 	proxyconfig "k8s.io/kubernetes/pkg/proxy/config"
 	"k8s.io/kubernetes/pkg/proxy/healthcheck"
@@ -129,6 +130,7 @@ func AddFlags(options *Options, fs *pflag.FlagSet) {
 	fs.StringVar(&options.master, "master", options.master, "The address of the Kubernetes API server (overrides any value in kubeconfig)")
 	fs.Int32Var(&options.healthzPort, "healthz-port", options.healthzPort, "The port to bind the health check server. Use 0 to disable.")
 	fs.Var(componentconfig.IPVar{Val: &options.config.HealthzBindAddress}, "healthz-bind-address", "The IP address and port for the health check server to serve on (set to 0.0.0.0 for all interfaces)")
+	fs.Var(componentconfig.IPVar{Val: &options.config.MetricsBindAddress}, "metrics-bind-address", "The IP address and port for the metrics server to serve on (set to 0.0.0.0 for all interfaces)")
 	fs.Int32Var(options.config.OOMScoreAdj, "oom-score-adj", util.Int32PtrDerefOr(options.config.OOMScoreAdj, int32(qos.KubeProxyOOMScoreAdj)), "The oom-score-adj value for kube-proxy process. Values must be within the range [-1000, 1000]")
 	fs.StringVar(&options.config.ResourceContainer, "resource-container", options.config.ResourceContainer, "Absolute name of the resource-only container to create and run the Kube-proxy in (Default: /kube-proxy).")
 	fs.MarkDeprecated("resource-container", "This feature will be removed in a later release.")
@@ -140,7 +142,7 @@ func AddFlags(options *Options, fs *pflag.FlagSet) {
 	fs.DurationVar(&options.config.IPTables.SyncPeriod.Duration, "iptables-sync-period", options.config.IPTables.SyncPeriod.Duration, "The maximum interval of how often iptables rules are refreshed (e.g. '5s', '1m', '2h22m').  Must be greater than 0.")
 	fs.DurationVar(&options.config.IPTables.MinSyncPeriod.Duration, "iptables-min-sync-period", options.config.IPTables.MinSyncPeriod.Duration, "The minimum interval of how often the iptables rules can be refreshed as endpoints and services change (e.g. '5s', '1m', '2h22m').")
 	fs.DurationVar(&options.config.ConfigSyncPeriod.Duration, "config-sync-period", options.config.ConfigSyncPeriod.Duration, "How often configuration from the apiserver is refreshed.  Must be greater than 0.")
-	fs.BoolVar(&options.config.IPTables.MasqueradeAll, "masquerade-all", options.config.IPTables.MasqueradeAll, "If using the pure iptables proxy, SNAT everything")
+	fs.BoolVar(&options.config.IPTables.MasqueradeAll, "masquerade-all", options.config.IPTables.MasqueradeAll, "If using the pure iptables proxy, SNAT everything (this not commonly needed)")
 	fs.StringVar(&options.config.ClusterCIDR, "cluster-cidr", options.config.ClusterCIDR, "The CIDR range of pods in the cluster. It is used to bridge traffic coming from outside of the cluster. If not provided, no off-cluster bridging will be performed.")
 	fs.StringVar(&options.config.ClientConnection.ContentType, "kube-api-content-type", options.config.ClientConnection.ContentType, "Content type of requests sent to apiserver.")
 	fs.Float32Var(&options.config.ClientConnection.QPS, "kube-api-qps", options.config.ClientConnection.QPS, "QPS to use while talking with kubernetes apiserver")
@@ -166,7 +168,7 @@ func AddFlags(options *Options, fs *pflag.FlagSet) {
 func NewOptions() (*Options, error) {
 	o := &Options{
 		config:      new(componentconfig.KubeProxyConfiguration),
-		healthzPort: 10256,
+		healthzPort: ports.ProxyHealthzPort,
 	}
 
 	o.scheme = runtime.NewScheme()
@@ -447,7 +449,7 @@ func NewProxyServer(config *componentconfig.KubeProxyConfiguration, cleanupAndEx
 
 	// We omit creation of pretty much everything if we run in cleanup mode
 	if cleanupAndExit {
-		return &ProxyServer{IptInterface: iptInterface}, nil
+		return &ProxyServer{IptInterface: iptInterface, CleanupAndExit: cleanupAndExit}, nil
 	}
 
 	client, eventClient, err := createClients(config.ClientConnection, master)
@@ -472,6 +474,12 @@ func NewProxyServer(config *componentconfig.KubeProxyConfiguration, cleanupAndEx
 	proxyMode := getProxyMode(string(config.Mode), iptInterface, iptables.LinuxKernelCompatTester{})
 	if proxyMode == proxyModeIPTables {
 		glog.V(0).Info("Using iptables Proxier.")
+		var nodeIP net.IP
+		if config.BindAddress != "0.0.0.0" {
+			nodeIP = net.ParseIP(config.BindAddress)
+		} else {
+			nodeIP = getNodeIP(client, hostname)
+		}
 		if config.IPTables.MasqueradeBit == nil {
 			// MasqueradeBit must be specified or defaulted.
 			return nil, fmt.Errorf("unable to read IPTables MasqueradeBit from config")
@@ -488,7 +496,7 @@ func NewProxyServer(config *componentconfig.KubeProxyConfiguration, cleanupAndEx
 			int(*config.IPTables.MasqueradeBit),
 			config.ClusterCIDR,
 			hostname,
-			getNodeIP(client, hostname),
+			nodeIP,
 			recorder,
 			healthzServer,
 		)
@@ -621,7 +629,9 @@ func (s *ProxyServer) Run() error {
 		}
 	}
 
-	s.Broadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: s.EventClient.Events("")})
+	if s.Broadcaster != nil && s.EventClient != nil {
+		s.Broadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: s.EventClient.Events("")})
+	}
 
 	// Start up a healthz server if requested
 	if s.HealthzServer != nil {

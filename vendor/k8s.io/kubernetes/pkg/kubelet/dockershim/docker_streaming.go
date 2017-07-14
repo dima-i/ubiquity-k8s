@@ -30,7 +30,7 @@ import (
 	"github.com/golang/glog"
 
 	"k8s.io/client-go/tools/remotecommand"
-	runtimeapi "k8s.io/kubernetes/pkg/kubelet/apis/cri/v1alpha1"
+	runtimeapi "k8s.io/kubernetes/pkg/kubelet/apis/cri/v1alpha1/runtime"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/server/streaming"
 	"k8s.io/kubernetes/pkg/kubelet/util/ioutils"
@@ -121,7 +121,7 @@ func (ds *dockerService) PortForward(req *runtimeapi.PortForwardRequest) (*runti
 	if err != nil {
 		return nil, err
 	}
-	// TODO(timstclair): Verify that ports are exposed.
+	// TODO(tallclair): Verify that ports are exposed.
 	return ds.streamingServer.GetPortForward(req)
 }
 

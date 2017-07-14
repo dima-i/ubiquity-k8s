@@ -21,9 +21,9 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
+	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/azure"
 	utilstrings "k8s.io/kubernetes/pkg/util/strings"
@@ -132,6 +132,10 @@ type azureFileProvisioner struct {
 var _ volume.Provisioner = &azureFileProvisioner{}
 
 func (a *azureFileProvisioner) Provision() (*v1.PersistentVolume, error) {
+	if !volume.AccessModesContainedInAll(a.plugin.GetAccessModes(), a.options.PVC.Spec.AccessModes) {
+		return nil, fmt.Errorf("invalid AccessModes %v: only AccessModes %v are supported", a.options.PVC.Spec.AccessModes, a.plugin.GetAccessModes())
+	}
+
 	var sku, location, account string
 
 	name := volume.GenerateVolumeName(a.options.ClusterName, a.options.PVName, 75)

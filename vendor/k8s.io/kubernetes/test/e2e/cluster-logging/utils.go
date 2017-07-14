@@ -22,24 +22,27 @@ import (
 	"strconv"
 	"time"
 
+	api_v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/util/integer"
 	"k8s.io/kubernetes/pkg/api"
-	api_v1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/test/e2e/framework"
 )
 
 const (
 	// Duration of delay between any two attempts to check if all logs are ingested
-	ingestionRetryDelay = 100 * time.Second
+	ingestionRetryDelay = 30 * time.Second
 
 	// Amount of requested cores for logging container in millicores
 	loggingContainerCpuRequest = 10
 
 	// Amount of requested memory for logging container in bytes
 	loggingContainerMemoryRequest = 10 * 1024 * 1024
+
+	// Name of the container used for logging tests
+	loggingContainerName = "logging-container"
 )
 
 var (
@@ -47,30 +50,25 @@ var (
 	logEntryMessageRegex = regexp.MustCompile("(?:I\\d+ \\d+:\\d+:\\d+.\\d+       \\d+ logs_generator.go:67] )?(\\d+) .*")
 )
 
-// Type to track the progress of logs generating pod
-type loggingPod struct {
-	// Name of the pod
-	Name string
-	// If we didn't read some log entries, their
-	// timestamps should be no less than this timestamp.
-	// Effectively, timestamp of the last ingested entry
-	// for which there's no missing entry before it
-	LastTimestamp time.Time
-	// Cache of ingested and read entries
-	Occurrences map[int]*logEntry
-	// Number of lines expected to be ingested from this pod
-	ExpectedLinesNumber int
+type logEntry struct {
+	Payload string
 }
 
-type logEntry struct {
-	Payload   string
-	Timestamp time.Time
+func (entry logEntry) getLogEntryNumber() (int, bool) {
+	submatch := logEntryMessageRegex.FindStringSubmatch(entry.Payload)
+	if submatch == nil || len(submatch) < 2 {
+		return 0, false
+	}
+
+	lineNumber, err := strconv.Atoi(submatch[1])
+	return lineNumber, err == nil
 }
 
 type logsProvider interface {
+	Init() error
+	Cleanup()
+	ReadEntries(*loggingPod) []logEntry
 	FluentdApplicationName() string
-	EnsureWorking() error
-	ReadEntries(*loggingPod) []*logEntry
 }
 
 type loggingTestConfig struct {
@@ -81,48 +79,52 @@ type loggingTestConfig struct {
 	MaxAllowedFluentdRestarts int
 }
 
-func (entry *logEntry) getLogEntryNumber() (int, bool) {
-	submatch := logEntryMessageRegex.FindStringSubmatch(entry.Payload)
-	if submatch == nil || len(submatch) < 2 {
-		return 0, false
-	}
-
-	lineNumber, err := strconv.Atoi(submatch[1])
-	return lineNumber, err == nil
+// Type to track the progress of logs generating pod
+type loggingPod struct {
+	// Name equals to the pod name and the container name.
+	Name string
+	// NodeName is the name of the node this pod will be
+	// assigned to. Can be empty.
+	NodeName string
+	// Occurrences is a cache of ingested and read entries.
+	Occurrences map[int]logEntry
+	// ExpectedLinesNumber is the number of lines that are
+	// expected to be ingested from this pod.
+	ExpectedLinesNumber int
+	// RunDuration is how long the pod will live.
+	RunDuration time.Duration
 }
 
-func createLoggingPod(f *framework.Framework, podName string, nodeName string, totalLines int, loggingDuration time.Duration) *loggingPod {
-	framework.Logf("Starting pod %s", podName)
-	createLogsGeneratorPod(f, podName, nodeName, totalLines, loggingDuration)
-
+func newLoggingPod(podName string, nodeName string, totalLines int, loggingDuration time.Duration) *loggingPod {
 	return &loggingPod{
-		Name: podName,
-		// It's used to avoid querying logs from before the pod was started
-		LastTimestamp:       time.Now(),
-		Occurrences:         make(map[int]*logEntry),
+		Name:                podName,
+		NodeName:            nodeName,
+		Occurrences:         make(map[int]logEntry),
 		ExpectedLinesNumber: totalLines,
+		RunDuration:         loggingDuration,
 	}
 }
 
-func createLogsGeneratorPod(f *framework.Framework, podName string, nodeName string, linesCount int, duration time.Duration) {
+func (p *loggingPod) Start(f *framework.Framework) {
+	framework.Logf("Starting pod %s", p.Name)
 	f.PodClient().Create(&api_v1.Pod{
 		ObjectMeta: meta_v1.ObjectMeta{
-			Name: podName,
+			Name: p.Name,
 		},
 		Spec: api_v1.PodSpec{
 			RestartPolicy: api_v1.RestartPolicyNever,
 			Containers: []api_v1.Container{
 				{
-					Name:  podName,
+					Name:  loggingContainerName,
 					Image: "gcr.io/google_containers/logs-generator:v0.1.0",
 					Env: []api_v1.EnvVar{
 						{
 							Name:  "LOGS_GENERATOR_LINES_TOTAL",
-							Value: strconv.Itoa(linesCount),
+							Value: strconv.Itoa(p.ExpectedLinesNumber),
 						},
 						{
 							Name:  "LOGS_GENERATOR_DURATION",
-							Value: duration.String(),
+							Value: p.RunDuration.String(),
 						},
 					},
 					Resources: api_v1.ResourceRequirements{
@@ -137,16 +139,22 @@ func createLogsGeneratorPod(f *framework.Framework, podName string, nodeName str
 					},
 				},
 			},
-			NodeName: nodeName,
+			NodeName: p.NodeName,
 		},
 	})
+}
+
+func startNewLoggingPod(f *framework.Framework, podName string, nodeName string, totalLines int, loggingDuration time.Duration) *loggingPod {
+	pod := newLoggingPod(podName, nodeName, totalLines, loggingDuration)
+	pod.Start(f)
+	return pod
 }
 
 func waitForSomeLogs(f *framework.Framework, config *loggingTestConfig) error {
 	podHasIngestedLogs := make([]bool, len(config.Pods))
 	podWithIngestedLogsCount := 0
 
-	for start := time.Now(); podWithIngestedLogsCount < len(config.Pods) && time.Since(start) < config.IngestionTimeout; time.Sleep(ingestionRetryDelay) {
+	for start := time.Now(); time.Since(start) < config.IngestionTimeout; time.Sleep(ingestionRetryDelay) {
 		for podIdx, pod := range config.Pods {
 			if podHasIngestedLogs[podIdx] {
 				continue
@@ -166,6 +174,10 @@ func waitForSomeLogs(f *framework.Framework, config *loggingTestConfig) error {
 					break
 				}
 			}
+		}
+
+		if podWithIngestedLogsCount == len(config.Pods) {
+			break
 		}
 	}
 
@@ -189,7 +201,7 @@ func waitForFullLogsIngestion(f *framework.Framework, config *loggingTestConfig)
 		missingByPod[podIdx] = pod.ExpectedLinesNumber
 	}
 
-	for start := time.Now(); totalMissing > 0 && time.Since(start) < config.IngestionTimeout; time.Sleep(ingestionRetryDelay) {
+	for start := time.Now(); time.Since(start) < config.IngestionTimeout; time.Sleep(ingestionRetryDelay) {
 		missing := 0
 		for podIdx, pod := range config.Pods {
 			if missingByPod[podIdx] == 0 {
@@ -203,6 +215,8 @@ func waitForFullLogsIngestion(f *framework.Framework, config *loggingTestConfig)
 		totalMissing = missing
 		if totalMissing > 0 {
 			framework.Logf("Still missing %d lines in total", totalMissing)
+		} else {
+			break
 		}
 	}
 
@@ -211,6 +225,11 @@ func waitForFullLogsIngestion(f *framework.Framework, config *loggingTestConfig)
 	if totalMissing > 0 {
 		framework.Logf("After %v still missing %d lines, %.2f%% of total number of lines",
 			config.IngestionTimeout, totalMissing, lostFraction*100)
+		for podIdx, missing := range missingByPod {
+			if missing != 0 {
+				framework.Logf("Still missing %d lines for pod %v", missing, config.Pods[podIdx])
+			}
+		}
 	}
 
 	if lostFraction > config.MaxAllowedLostFraction {
@@ -245,18 +264,13 @@ func pullMissingLogsCount(logsProvider logsProvider, pod *loggingPod) int {
 	if err != nil {
 		framework.Logf("Failed to get missing lines count from pod %s due to %v", pod.Name, err)
 		return pod.ExpectedLinesNumber
-	} else if missingOnPod > 0 {
-		framework.Logf("Pod %s is missing %d lines", pod.Name, missingOnPod)
-	} else {
-		framework.Logf("All logs from pod %s are ingested", pod.Name)
 	}
+
 	return missingOnPod
 }
 
 func getMissingLinesCount(logsProvider logsProvider, pod *loggingPod) (int, error) {
 	entries := logsProvider.ReadEntries(pod)
-
-	framework.Logf("Got %d entries from provider", len(entries))
 
 	for _, entry := range entries {
 		lineNumber, ok := entry.getLogEntryNumber()
@@ -268,17 +282,6 @@ func getMissingLinesCount(logsProvider logsProvider, pod *loggingPod) (int, erro
 			framework.Logf("Unexpected line number: %d", lineNumber)
 		} else {
 			pod.Occurrences[lineNumber] = entry
-		}
-	}
-
-	for i := 0; i < pod.ExpectedLinesNumber; i++ {
-		entry, ok := pod.Occurrences[i]
-		if !ok {
-			break
-		}
-
-		if entry.Timestamp.After(pod.LastTimestamp) {
-			pod.LastTimestamp = entry.Timestamp
 		}
 	}
 

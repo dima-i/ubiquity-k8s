@@ -19,7 +19,6 @@ package webhook
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
@@ -64,6 +63,9 @@ const (
 	defaultBatchMaxSize    = 100         // Only send 100 events at a time.
 	defaultBatchMaxWait    = time.Minute // Send events at least once a minute.
 )
+
+// The plugin name reported in error metrics.
+const pluginName = "webhook"
 
 // NewBackend returns an audit backend that sends events over HTTP to an external service.
 // The mode indicates the caching behavior of the webhook. Either blocking (ModeBlocking)
@@ -119,7 +121,7 @@ func (b *blockingBackend) Run(stopCh <-chan struct{}) error {
 
 func (b *blockingBackend) ProcessEvents(ev ...*auditinternal.Event) {
 	if err := b.processEvents(ev...); err != nil {
-		glog.Errorf("failed to POST webhook events: %v", err)
+		audit.HandlePluginError(pluginName, err, ev...)
 	}
 }
 
@@ -131,20 +133,6 @@ func (b *blockingBackend) processEvents(ev ...*auditinternal.Event) error {
 	// NOTE: No exponential backoff because this is the blocking webhook
 	// mode. Any attempts to retry will block API server requests.
 	return b.w.RestClient.Post().Body(&list).Do().Error()
-}
-
-// Copied from generated code in k8s.io/apiserver/pkg/apis/audit.
-//
-// TODO(ericchiang): Have the generated code expose these methods like metav1.GetGeneratedDeepCopyFuncs().
-var auditDeepCopyFuncs = []conversion.GeneratedDeepCopyFunc{
-	{Fn: auditinternal.DeepCopy_audit_Event, InType: reflect.TypeOf(&auditinternal.Event{})},
-	{Fn: auditinternal.DeepCopy_audit_EventList, InType: reflect.TypeOf(&auditinternal.EventList{})},
-	{Fn: auditinternal.DeepCopy_audit_GroupResources, InType: reflect.TypeOf(&auditinternal.GroupResources{})},
-	{Fn: auditinternal.DeepCopy_audit_ObjectReference, InType: reflect.TypeOf(&auditinternal.ObjectReference{})},
-	{Fn: auditinternal.DeepCopy_audit_Policy, InType: reflect.TypeOf(&auditinternal.Policy{})},
-	{Fn: auditinternal.DeepCopy_audit_PolicyList, InType: reflect.TypeOf(&auditinternal.PolicyList{})},
-	{Fn: auditinternal.DeepCopy_audit_PolicyRule, InType: reflect.TypeOf(&auditinternal.PolicyRule{})},
-	{Fn: auditinternal.DeepCopy_audit_UserInfo, InType: reflect.TypeOf(&auditinternal.UserInfo{})},
 }
 
 func newBatchWebhook(configFile string) (*batchBackend, error) {
@@ -159,8 +147,7 @@ func newBatchWebhook(configFile string) (*batchBackend, error) {
 			return nil, fmt.Errorf("registering meta deep copy method: %v", err)
 		}
 	}
-
-	for _, f := range auditDeepCopyFuncs {
+	for _, f := range auditinternal.GetGeneratedDeepCopyFuncs() {
 		if err := c.RegisterGeneratedDeepCopyFunc(f); err != nil {
 			return nil, fmt.Errorf("registering audit deep copy method: %v", err)
 		}
@@ -259,7 +246,11 @@ L:
 			return b.w.RestClient.Post().Body(&list).Do().Error()
 		})
 		if err != nil {
-			glog.Errorf("failed to POST webhook events: %v", err)
+			impacted := make([]*auditinternal.Event, len(events))
+			for i := range events {
+				impacted[i] = &events[i]
+			}
+			audit.HandlePluginError(pluginName, err, impacted...)
 		}
 	}()
 	return
@@ -278,7 +269,7 @@ func (b *batchBackend) ProcessEvents(ev ...*auditinternal.Event) {
 		select {
 		case b.buffer <- event:
 		default:
-			glog.Errorf("audit webhook queue blocked, failed to send %d event(s)", len(ev)-i)
+			audit.HandlePluginError(pluginName, fmt.Errorf("audit webhook queue blocked"), ev[i:]...)
 			return
 		}
 	}

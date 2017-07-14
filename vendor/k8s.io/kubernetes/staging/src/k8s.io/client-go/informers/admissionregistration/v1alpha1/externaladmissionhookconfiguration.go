@@ -19,13 +19,13 @@ limitations under the License.
 package v1alpha1
 
 import (
+	admissionregistration_v1alpha1 "k8s.io/api/admissionregistration/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	watch "k8s.io/apimachinery/pkg/watch"
 	internalinterfaces "k8s.io/client-go/informers/internalinterfaces"
 	kubernetes "k8s.io/client-go/kubernetes"
 	v1alpha1 "k8s.io/client-go/listers/admissionregistration/v1alpha1"
-	admissionregistration_v1alpha1 "k8s.io/client-go/pkg/apis/admissionregistration/v1alpha1"
 	cache "k8s.io/client-go/tools/cache"
 	time "time"
 )
@@ -45,10 +45,10 @@ func newExternalAdmissionHookConfigurationInformer(client kubernetes.Interface, 
 	sharedIndexInformer := cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options v1.ListOptions) (runtime.Object, error) {
-				return client.AdmissionregistrationV1alpha1().ExternalAdmissionHookConfigurations(v1.NamespaceAll).List(options)
+				return client.AdmissionregistrationV1alpha1().ExternalAdmissionHookConfigurations().List(options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
-				return client.AdmissionregistrationV1alpha1().ExternalAdmissionHookConfigurations(v1.NamespaceAll).Watch(options)
+				return client.AdmissionregistrationV1alpha1().ExternalAdmissionHookConfigurations().Watch(options)
 			},
 		},
 		&admissionregistration_v1alpha1.ExternalAdmissionHookConfiguration{},

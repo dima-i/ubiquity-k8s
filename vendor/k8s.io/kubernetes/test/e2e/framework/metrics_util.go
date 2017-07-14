@@ -32,8 +32,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/pkg/master/ports"
-	"k8s.io/kubernetes/pkg/metrics"
 	"k8s.io/kubernetes/pkg/util/system"
+	"k8s.io/kubernetes/test/e2e/metrics"
 
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
@@ -50,6 +50,10 @@ const (
 	// portion of CPU and basically stop all the real work.
 	// Increasing threshold to 1s is within our SLO and should solve this problem.
 	apiCallLatencyThreshold time.Duration = 1 * time.Second
+
+	// We set a higher threshold for list apicalls as they can take more time when
+	// the list is really big. For eg. list nodes in a 5000-node cluster.
+	apiListCallLatencyThreshold time.Duration = 2 * time.Second
 )
 
 type MetricsForE2E metrics.MetricsCollection
@@ -341,7 +345,9 @@ func HighLatencyRequests(c clientset.Interface) (int, *APIResponsiveness, error)
 	top := 5
 	for i := range metrics.APICalls {
 		isBad := false
-		if metrics.APICalls[i].Latency.Perc99 > apiCallLatencyThreshold {
+		verb := metrics.APICalls[i].Verb
+		if verb != "LIST" && metrics.APICalls[i].Latency.Perc99 > apiCallLatencyThreshold ||
+			verb == "LIST" && metrics.APICalls[i].Latency.Perc99 > apiListCallLatencyThreshold {
 			badMetrics++
 			isBad = true
 		}

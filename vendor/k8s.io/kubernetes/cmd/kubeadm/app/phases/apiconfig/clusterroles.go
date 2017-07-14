@@ -19,12 +19,15 @@ package apiconfig
 import (
 	"fmt"
 
+	"k8s.io/api/core/v1"
+	rbac "k8s.io/api/rbac/v1beta1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/pkg/api/v1"
-	rbac "k8s.io/client-go/pkg/apis/rbac/v1beta1"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
+	rbachelper "k8s.io/kubernetes/pkg/apis/rbac/v1beta1"
 	bootstrapapi "k8s.io/kubernetes/pkg/bootstrap/api"
+	"k8s.io/kubernetes/pkg/util/version"
 )
 
 const (
@@ -45,8 +48,8 @@ const (
 
 // TODO: Are there any unit tests that could be made for this file other than duplicating all values and logic in a separate file?
 
-// CreateServiceAccounts creates the necessary serviceaccounts that kubeadm uses/might use.
-func CreateServiceAccounts(clientset *clientset.Clientset) error {
+// CreateServiceAccounts creates the necessary serviceaccounts that kubeadm uses/might use, if they don't already exist.
+func CreateServiceAccounts(clientset clientset.Interface) error {
 	serviceAccounts := []v1.ServiceAccount{
 		{
 			ObjectMeta: metav1.ObjectMeta{
@@ -64,14 +67,16 @@ func CreateServiceAccounts(clientset *clientset.Clientset) error {
 
 	for _, sa := range serviceAccounts {
 		if _, err := clientset.CoreV1().ServiceAccounts(metav1.NamespaceSystem).Create(&sa); err != nil {
-			return err
+			if !apierrors.IsAlreadyExists(err) {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
 // CreateRBACRules creates the essential RBAC rules for a minimally set-up cluster
-func CreateRBACRules(clientset *clientset.Clientset) error {
+func CreateRBACRules(clientset *clientset.Clientset, k8sVersion *version.Version) error {
 	if err := createRoles(clientset); err != nil {
 		return err
 	}
@@ -83,6 +88,9 @@ func CreateRBACRules(clientset *clientset.Clientset) error {
 	}
 	if err := createClusterRoleBindings(clientset); err != nil {
 		return err
+	}
+	if err := deletePermissiveNodesBindingWhenUsingNodeAuthorization(clientset, k8sVersion); err != nil {
+		return fmt.Errorf("failed to remove the permissive 'system:nodes' Group Subject in the 'system:node' ClusterRoleBinding: %v", err)
 	}
 
 	fmt.Println("[apiconfig] Created RBAC rules")
@@ -97,13 +105,19 @@ func createRoles(clientset *clientset.Clientset) error {
 				Namespace: metav1.NamespacePublic,
 			},
 			Rules: []rbac.PolicyRule{
-				rbac.NewRule("get").Groups("").Resources("configmaps").RuleOrDie(),
+				rbachelper.NewRule("get").Groups("").Resources("configmaps").Names("cluster-info").RuleOrDie(),
 			},
 		},
 	}
 	for _, role := range roles {
-		if _, err := clientset.RbacV1beta1().Roles(metav1.NamespacePublic).Create(&role); err != nil {
-			return err
+		if _, err := clientset.RbacV1beta1().Roles(role.ObjectMeta.Namespace).Create(&role); err != nil {
+			if !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("unable to create RBAC role: %v", err)
+			}
+
+			if _, err := clientset.RbacV1beta1().Roles(role.ObjectMeta.Namespace).Update(&role); err != nil {
+				return fmt.Errorf("unable to update RBAC role: %v", err)
+			}
 		}
 	}
 	return nil
@@ -131,8 +145,14 @@ func createRoleBindings(clientset *clientset.Clientset) error {
 	}
 
 	for _, roleBinding := range roleBindings {
-		if _, err := clientset.RbacV1beta1().RoleBindings(metav1.NamespacePublic).Create(&roleBinding); err != nil {
-			return err
+		if _, err := clientset.RbacV1beta1().RoleBindings(roleBinding.ObjectMeta.Namespace).Create(&roleBinding); err != nil {
+			if !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("unable to create RBAC rolebinding: %v", err)
+			}
+
+			if _, err := clientset.RbacV1beta1().RoleBindings(roleBinding.ObjectMeta.Namespace).Update(&roleBinding); err != nil {
+				return fmt.Errorf("unable to update RBAC rolebinding: %v", err)
+			}
 		}
 	}
 	return nil
@@ -145,14 +165,20 @@ func createClusterRoles(clientset *clientset.Clientset) error {
 				Name: nodeAutoApproveBootstrap,
 			},
 			Rules: []rbac.PolicyRule{
-				rbac.NewRule("create").Groups("certificates.k8s.io").Resources("certificatesigningrequests/nodeclient").RuleOrDie(),
+				rbachelper.NewRule("create").Groups("certificates.k8s.io").Resources("certificatesigningrequests/nodeclient").RuleOrDie(),
 			},
 		},
 	}
 
 	for _, roleBinding := range clusterRoles {
 		if _, err := clientset.RbacV1beta1().ClusterRoles().Create(&roleBinding); err != nil {
-			return err
+			if !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("unable to create RBAC clusterrole: %v", err)
+			}
+
+			if _, err := clientset.RbacV1beta1().ClusterRoles().Update(&roleBinding); err != nil {
+				return fmt.Errorf("unable to update RBAC clusterrole: %v", err)
+			}
 		}
 	}
 	return nil
@@ -213,8 +239,43 @@ func createClusterRoleBindings(clientset *clientset.Clientset) error {
 
 	for _, clusterRoleBinding := range clusterRoleBindings {
 		if _, err := clientset.RbacV1beta1().ClusterRoleBindings().Create(&clusterRoleBinding); err != nil {
-			return err
+			if !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("unable to create RBAC clusterrolebinding: %v", err)
+			}
+
+			if _, err := clientset.RbacV1beta1().ClusterRoleBindings().Update(&clusterRoleBinding); err != nil {
+				return fmt.Errorf("unable to update RBAC clusterrolebinding: %v", err)
+			}
 		}
 	}
+	return nil
+}
+
+func deletePermissiveNodesBindingWhenUsingNodeAuthorization(clientset *clientset.Clientset, k8sVersion *version.Version) error {
+
+	nodesRoleBinding, err := clientset.RbacV1beta1().ClusterRoleBindings().Get(kubeadmconstants.NodesClusterRoleBinding, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// Nothing to do; the RoleBinding doesn't exist
+			return nil
+		}
+		return err
+	}
+
+	newSubjects := []rbac.Subject{}
+	for _, subject := range nodesRoleBinding.Subjects {
+		// Skip the subject that binds to the system:nodes group
+		if subject.Name == kubeadmconstants.NodesGroup && subject.Kind == "Group" {
+			continue
+		}
+		newSubjects = append(newSubjects, subject)
+	}
+
+	nodesRoleBinding.Subjects = newSubjects
+
+	if _, err := clientset.RbacV1beta1().ClusterRoleBindings().Update(nodesRoleBinding); err != nil {
+		return err
+	}
+
 	return nil
 }

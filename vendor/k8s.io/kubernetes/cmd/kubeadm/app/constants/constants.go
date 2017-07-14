@@ -20,12 +20,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"k8s.io/client-go/pkg/api/v1"
+	"k8s.io/api/core/v1"
+	"k8s.io/kubernetes/pkg/util/version"
 )
 
 const (
 	// KubernetesDir is the directory kubernetes owns for storing various configuration files
 	KubernetesDir = "/etc/kubernetes"
+
+	ManifestsSubDirName = "manifests"
 
 	CACertAndKeyBaseName = "ca"
 	CACertName           = "ca.crt"
@@ -34,10 +37,12 @@ const (
 	APIServerCertAndKeyBaseName = "apiserver"
 	APIServerCertName           = "apiserver.crt"
 	APIServerKeyName            = "apiserver.key"
+	APIServerCertCommonName     = "kube-apiserver" //used as subject.commonname attribute (CN)
 
 	APIServerKubeletClientCertAndKeyBaseName = "apiserver-kubelet-client"
 	APIServerKubeletClientCertName           = "apiserver-kubelet-client.crt"
 	APIServerKubeletClientKeyName            = "apiserver-kubelet-client.key"
+	APIServerKubeletClientCertCommonName     = "kube-apiserver-kubelet-client" //used as subject.commonname attribute (CN)
 
 	ServiceAccountKeyBaseName    = "sa"
 	ServiceAccountPublicKeyName  = "sa.pub"
@@ -50,21 +55,20 @@ const (
 	FrontProxyClientCertAndKeyBaseName = "front-proxy-client"
 	FrontProxyClientCertName           = "front-proxy-client.crt"
 	FrontProxyClientKeyName            = "front-proxy-client.key"
+	FrontProxyClientCertCommonName     = "front-proxy-client" //used as subject.commonname attribute (CN)
 
 	AdminKubeConfigFileName             = "admin.conf"
 	KubeletKubeConfigFileName           = "kubelet.conf"
 	ControllerManagerKubeConfigFileName = "controller-manager.conf"
 	SchedulerKubeConfigFileName         = "scheduler.conf"
 
-	// Important: a "v"-prefix shouldn't exist here; semver doesn't allow that
-	MinimumControlPlaneVersion = "1.6.0-beta.3"
-
 	// Some well-known users and groups in the core Kubernetes authorization system
 
-	ControllerManagerUser = "system:kube-controller-manager"
-	SchedulerUser         = "system:kube-scheduler"
-	MastersGroup          = "system:masters"
-	NodesGroup            = "system:nodes"
+	ControllerManagerUser   = "system:kube-controller-manager"
+	SchedulerUser           = "system:kube-scheduler"
+	MastersGroup            = "system:masters"
+	NodesGroup              = "system:nodes"
+	NodesClusterRoleBinding = "system:node"
 
 	// Constants for what we name our ServiceAccounts with limited access to the cluster in case of RBAC
 	KubeDNSServiceAccountName   = "kube-dns"
@@ -89,9 +93,6 @@ const (
 
 	// MinExternalEtcdVersion indicates minimum external etcd version which kubeadm supports
 	MinExternalEtcdVersion = "3.0.14"
-
-	// DefaultAdmissionControl specifies the default admission control options that will be used
-	DefaultAdmissionControl = "NamespaceLifecycle,LimitRanger,ServiceAccount,PersistentVolumeLabel,DefaultStorageClass,ResourceQuota,DefaultTolerationSeconds"
 )
 
 var (
@@ -107,4 +108,12 @@ var (
 
 	// DefaultTokenUsages specifies the default functions a token will get
 	DefaultTokenUsages = []string{"signing", "authentication"}
+
+	// MinimumControlPlaneVersion specifies the minimum control plane version kubeadm can deploy
+	MinimumControlPlaneVersion = version.MustParseSemantic("v1.7.0")
 )
+
+// BuildStaticManifestFilepath returns the location on the disk where the Static Pod should be present
+func BuildStaticManifestFilepath(componentName string) string {
+	return filepath.Join(KubernetesDir, ManifestsSubDirName, componentName+".yaml")
+}
