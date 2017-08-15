@@ -130,7 +130,20 @@ func (p *flexProvisioner) Provision(options controller.VolumeOptions) (*v1.Persi
 	annotations := make(map[string]string)
 	annotations[annCreatedBy] = createdBy
 	annotations[annProvisionerId] = "ubiquity-provisioner"
+	var pvReclaimPolicy v1.PersistentVolumeReclaimPolicy
+	reclaimPolicy, ok := options.Parameters["reclaimpolicy"]
+	if !ok {
+		pvReclaimPolicy = v1.PersistentVolumeReclaimRetain
+	} else {
+		if reclaimPolicy == "delete" {
+			pvReclaimPolicy = v1.PersistentVolumeReclaimDelete
+		} else if reclaimPolicy == "recycle" {
+			pvReclaimPolicy = v1.PersistentVolumeReclaimRecycle
+		} else {
+			pvReclaimPolicy = v1.PersistentVolumeReclaimRetain
+		}
 
+	}
 	pv := &v1.PersistentVolume{
 		ObjectMeta: v1.ObjectMeta{
 			Name:        options.PVName,
@@ -138,7 +151,7 @@ func (p *flexProvisioner) Provision(options controller.VolumeOptions) (*v1.Persi
 			Annotations: annotations,
 		},
 		Spec: v1.PersistentVolumeSpec{
-			PersistentVolumeReclaimPolicy: options.PersistentVolumeReclaimPolicy,
+			PersistentVolumeReclaimPolicy: pvReclaimPolicy,
 			AccessModes:                   options.PVC.Spec.AccessModes,
 			Capacity: v1.ResourceList{
 				v1.ResourceName(v1.ResourceStorage): options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)],
