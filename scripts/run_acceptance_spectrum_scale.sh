@@ -1,7 +1,5 @@
 #!/bin/bash -ex
 
-# Export FILESYSTEM to gpfs filesystem, by default it will use gpfs_device
-
 set -e
 scripts=$(dirname $0)
 . $scripts/acceptance_utils.sh
@@ -9,36 +7,33 @@ shopt -s expand_aliases
 export PATH=$PATH:/usr/lpp/mmfs/bin/
 PODName="write-pod-test"
 
-if [[ -z "${FILESYSTEM}" ]]; then
-        FileSystem="gpfs_device"
-else
-        FileSystem=${FILESYSTEM}
-fi
-
-
-function changefilesystem() {
-	filename=$1
-	from=$2
-	to=$3
-
-	sed -i "s/$from/$to/" $scripts/../deploy/$1
-}
-
 function cleanup() {
+	systemctl restart kubelet
+	systemctl restart ubiquity-k8s-provisioner
+	sleep 20
+
+	for ent in `mount |grep nfs4 |awk '{print $3}' |xargs`;do
+		  umount $ent -f
+	done
 	kubectl delete storageclass --all
 	kubectl delete pvc --all
-	kubectl delete pods --all
+	kubectl delete pv --all
+	kubectl delete pods --grace-period=0 --force --all
 	maxretry=20
 	counter=0
 	while [ $counter -lt $maxretry ]; do
 		storageclass=`kubectl get storageclass --show-all`
 		pvc=`kubectl get pvc --show-all`
 		pods=`kubectl get pods --show-all`
-		if [ "$storageclass" == "" ] &&  [ "$pvc" == "" ] && [ "$pods" == "" ]; then
+		pvs=`kubectl get pv --show-all`
+		if [ "$storageclass" == "" ] &&  [ "$pvc" == "" ] && [ "$pods" == "" ] && [ "$pvs" == "" ]; then
 			return
 		fi 
 		sleep 5
 		counter=$(($counter+1))		
+	if [ $counter -ge $maxretry ];then
+		exit -1
+	fi
 	done
 }
 
@@ -72,7 +67,7 @@ function verify_create()
 	local __fileset=$4
 	local __filesystem=$5
 	pvname=`kubectl get pvc $l_pvcName --no-headers -o custom-columns=name:spec.volumeName`
-	fileset=`kubectl get pv -o json $pvname | grep -A15 flexVolume |grep fileset |awk '{print $2}' |cut -d, -f1`
+	fileset=`kubectl get pv -o json $pvname | grep -A15 flexVolume |grep \"fileset\" |awk '{print $2}' |cut -d, -f1`
 	filesystemname=`kubectl get pv -o json $pvname | grep -A15 flexVolume |grep filesystem |awk '{print $2}' |cut -d, -f1`
 	filesystemname=`sed -e 's/^"//' -e 's/"$//' <<<"$filesystemname"`
 	fileset=`sed -e 's/^"//' -e 's/"$//' <<<"$fileset"`
@@ -177,12 +172,9 @@ function execute_scale_test()
 	kubectl get storageclass
 }
 cleanup
-changefilesystem "storage_class_fileset.yml" "gold" $FileSystem 
-changefilesystem "storage_class_fileset_nfs.yml" "gold" $FileSystem 
 
 echo "Execute spectrum-scale Backend"
 execute_scale_test "spectrum-scale"
-
 echo "Execute spectrum-scale-nfs Backend"
 execute_scale_test "spectrum-scale-nfs"
 
