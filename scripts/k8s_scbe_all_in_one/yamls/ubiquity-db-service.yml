@@ -6,7 +6,7 @@ metadata:
     app: ubiquity-db
 spec:
   ports:
-    - port: 5432
+    - port: 5432  # If you change this port, you must update ubiquity deployment wit the new ubiquity-db port
       protocol: TCP
       targetPort: 5432
   selector:

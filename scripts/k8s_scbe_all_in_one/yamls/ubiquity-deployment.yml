@@ -16,34 +16,77 @@ spec:
         - containerPort: 9999
           name: ubiquity-port
         env:
-          - name: SCBE_DEFAULT_SERVICE
-            value: "SCBE_DEFAULT_SERVICE_VALUE"
-          - name: SCBE_MANAGEMENT_IP
-            value: "SCBE_MANAGEMENT_IP_VALUE"
-          - name: SCBE_MANAGEMENT_PORT
-            value: "8440"
-          - name: SKIP_VERIFY_SSL
-            value: "SKIP_VERIFY_SSL_VALUE"    # boolean
+          # ENV from secret scbe-credentials
           - name: SCBE_USERNAME
-            value: "SCBE_USERNAME_VALUE"
+              valueFrom:
+                configMapKeyRef:
+                  name: scbe-credentials
+                  key: username
+
           - name: SCBE_PASSWORD
-            value: "SCBE_PASSWORD_VALUE"
+              valueFrom:
+                configMapKeyRef:
+                  name: scbe-credentials
+                  key: password
+
+          # ENV from ubiquity-configmap
+          - name: SCBE_MANAGEMENT_IP
+            valueFrom:
+              configMapKeyRef:
+                name: ubiquity-configmap
+                key: SCBE-MANAGEMENT-IP
+
+          - name: SCBE_MANAGEMENT_PORT
+            valueFrom:
+              configMapKeyRef:
+                name: ubiquity-configmap
+                key: SCBE-MANAGEMENT-PORT
+
+          - name: SCBE_DEFAULT_SERVICE
+            valueFrom:
+              configMapKeyRef:
+                name: ubiquity-configmap
+                key: SCBE-DEFAULT-SERVICE
+
+          - name: DEFAULT_VOLUME_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: ubiquity-configmap
+                  key: DEFAULT-VOLUME-SIZE
+
+          - name: UBIQUITY_INSTANCE_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: ubiquity-configmap
+                  key: UBIQUITY-INSTANCE-NAME
+
+          - name: DEFAULT_FSTYPE    # ext4 or xfs
+              valueFrom:
+                configMapKeyRef:
+                  name: ubiquity-configmap
+                  key: DEFAULT-FSTYPE
+
+          # ENV from ubiquity-deployments-configmap
+          - name: LOG_LEVEL         # debug / info / error
+              valueFrom:
+                configMapKeyRef:
+                  name: ubiquity-deployments-configmap
+                  key: LOG-LEVEL
+
+          - name: LOG_PATH          # Ubiquity log file directory
+              valueFrom:
+                configMapKeyRef:
+                  name: ubiquity-deployments-configmap
+                  key: LOG-PATH
+
+
+          # Env hardcoded for GA v1
           - name: PORT              # Ubiquity port
             value: "9999"
-          - name: LOG_PATH          # Ubiquity log file directory
-            value: "/tmp"
           - name: CONFIG_PATH       # Ubiquity config directory
             value: "/tmp"
           - name: DEFAULT_BACKEND   # or other backends, such as :scbe, spectrum-scale-nfs
             value: "scbe"
-          - name: LOG_LEVEL         # debug / info / error
-            value: "debug"
-          - name: DEFAULT_VOLUME_SIZE
-            value: "2"
-          - name: UBIQUITY_INSTANCE_NAME
-            value: "UBIQUITY_INSTANCE_NAME_VALUE"
-          - name: DEFAULT_FSTYPE    # ext4 or xfs
-            value: "ext4"
           - name: UBIQUITY_DB_PSQL_HOST   # Ubiquity DB hostname
             value: "ubiquity-db"          # the ubiquity-db service name
           - name: UBIQUITY_DB_PSQL_PORT

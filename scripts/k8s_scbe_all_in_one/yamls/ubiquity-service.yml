@@ -6,7 +6,7 @@ metadata:
     app: ubiquity
 spec:
   ports:
-    - port: 9999
+    - port: 9999    # If you change this port, you must update the provisioner and the flex with the new port number of ubiquity service.
       protocol: TCP
       targetPort: 9999
   selector:

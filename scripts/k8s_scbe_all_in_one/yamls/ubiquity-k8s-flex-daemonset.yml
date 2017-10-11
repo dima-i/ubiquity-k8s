@@ -22,6 +22,28 @@ spec:
           mountPath: /etc/ubiquity
         - name: ubiquity-k8s-flex-conf
           mountPath: /mnt/ubiquity-k8s-flex-conf
+        env:
+          # TODO the setup_flex.sh should use this envs to update the flex config
+          # ENV from ubiquity-deployments-configmap
+          - name: LOG_LEVEL         # debug / info / error
+              valueFrom:
+                configMapKeyRef:
+                  name: ubiquity-deployments-configmap
+                  key: LOG-LEVEL
+
+          # ENV from secret scbe-credentials
+          - name: SCBE_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: scbe-credentials
+                  key: username
+
+          - name: SCBE_PASSWORD
+              valueFrom:
+                configMapKeyRef:
+                  name: scbe-credentials
+                  key: password
+
       volumes:
       - name: host-k8splugindir
         hostPath:

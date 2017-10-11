@@ -26,6 +26,11 @@ echo "Copying the flex config file ${FLEX_CONF_PATH} to ${ETC_UBIQUITY}/${FLEX_C
 cp ${FLEX_CONF_PATH} ${ETC_UBIQUITY}/.${FLEX_CONF}
 mv -f ${ETC_UBIQUITY}/.${FLEX_CONF} ${ETC_UBIQUITY}/${FLEX_CONF}
 
+echo "Update the flex config file with dynamic inputs"
+[ -n "$SCBE_USERNAME" ] && sed -i "s/^username = .*/username = $SCBE_USERNAME/g" ${ETC_UBIQUITY}/${FLEX_CONF}
+[ -n "$SCBE_PASSWORD" ] && sed -i "s/^password = .*/password = $SCBE_PASSWORD/g" ${ETC_UBIQUITY}/${FLEX_CONF}
+[ -n "$LOG_LEVEL" ] && sed -i "s/^logLevel = .*/logLevel = $SCBE_PASSWORD/g" ${ETC_UBIQUITY}/${FLEX_CONF}
+
 echo "Finished to copy the flex driver [$DRIVER] and a config file [${FLEX_CONF}]"
 while : ; do
   sleep 3600

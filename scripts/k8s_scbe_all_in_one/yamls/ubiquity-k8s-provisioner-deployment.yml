@@ -25,8 +25,14 @@ spec:
             value: "/tmp"
           - name: BACKENDS         # used backends "spectrum-scale,spectrum-scale-nfs,scbe"
             value: "scbe" 
-          - name: LOG_LEVEL       # debug / info / error
-            value: "debug"
+
+          # ENV from ubiquity-deployments-configmap
+          - name: LOG_LEVEL         # debug / info / error
+              valueFrom:
+                configMapKeyRef:
+                  name: ubiquity-deployments-configmap
+                  key: LOG-LEVEL
+
         volumeMounts:
           - name: k8s-config
             mountPath: /tmp/k8sconfig
