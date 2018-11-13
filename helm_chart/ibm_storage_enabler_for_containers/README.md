@@ -8,7 +8,7 @@ IBM Storage Enabler for Containers allows IBM storage systems to be used as pers
 Thus, the containers can be used with stateful microservices, such as database applications (MongoDB, PostgreSQL etc).
 IBM Storage Enabler for Containers uses Kubernetes dynamic provisioning for creating and deleting volumes on IBM storage systems.
 In addition, IBM Storage Enabler for Containers utilizes the full set of Kubernetes FlexVolume APIs for volume operations on a host.
-The operations include initiation, attachment/detachment, mounting/unmounting etc..
+The operations include initiation, attachment/detachment, mounting/unmounting etc.
 
 ## Chart Details
 This chart includes:
@@ -18,12 +18,73 @@ This chart includes:
 * A Kubernetes FlexVolume DaemonSet for attaching and mounting storage volumes into a pod within a Kubernetes node.
 
 ## Prerequisites
-* Kubernetes Level - indicate if specific APIs must be enabled (i.e. Kubernetes 1.6 with Beta APIs enabled)
-* PersistentVolume requirements (if persistence.enabled) - PV provisioner support, StorageClass defined, etc. (i.e. PersistentVolume provisioner support in underlying infrastructure with ibmc-file-gold StorageClass defined if persistance.enabled=true)
-* Simple bullet list of CPU, MEM, Storage requirements
-* Even if the chart only exposes a few resource settings, this section needs to inclusive of all / total resources of all charts and subcharts.
-
-
+Follow these steps to prepare your environment for installing the IBM Storage Enabler for Containers in the Kubernetes cluster that requires persistent volumes for stateful containers.
+1. Contact your storage administrator and make sure IBM Storage Enabler for Containers interface has been added to active Spectrum Connect instance and at least one storage service has been delegated to it.
+2. Verify that there is a proper communication link between Spectrum Connect and Kubernetes cluster.
+3. Perform these steps for each worker node in Kubernetes cluster:
+  * Install the following Linux packages to ensure Fibre Channel and iSCSI connectivity. Skip this step, if the packages are already installed.
+    * RHEL: `sg3_utils` and `iscsi-initiator-utils` (if iSCSI connection is required).
+    ```bash
+    sudo yum -y install sg3_utils
+    sudo yum -y install iscsi-initiator-utils
+    ```
+    * Ubuntu: `scsitools` and `open-iscsi` (if iSCSI connection is required).
+    ```bash
+    sudo apt-get install scsitools
+    sudo apt-get install open-iscsi
+    ```
+ * Configure Linux multipath devices on the host. Create and set the relevant storage system parameters in the `/etc/multipath.conf file`. You can also use the default `multipath.conf` file located in the `/usr/share/doc/device-mapper-multipath-*` directory. 
+ Verify that the `systemctl` status `multipathd` output indicates that the multipath status is active and error-free.
+   * RHEL: 
+    ```bash
+    yum install device-mapper-multipath
+    sudo modprobe dm-multipath
+    systemctl start multipathd
+    systemctl status multipathd
+    multipath -ll
+    ```
+   * Ubuntu: 
+    ```bash
+    apt-get install multipath-tools
+    sudo modprobe dm-multipath
+    systemctl start multipathd
+    systemctl status multipathd
+    multipath -ll
+    ```  
+   Important: When configuring Linux multipath devices, verify that the `find_multipaths` parameter in the `multipath.conf` file is disabled.
+   * RHEL: Remove the `find_multipaths yes` string from the `multipath.conf` file.
+   * Ubuntu: Add the `find_multipaths no` string to the `multipath.conf` file, see below:
+    ```bash
+    defaults {
+   find_multipaths no
+   }
+    ```
+* Configure storage system connectivity.
+  * Define the hostname of each Kubernetes node on the relevant storage systems with the valid WWPN or IQN of the node. The hostname on the storage system must be the same as the hostname defined in the Kubernetes cluster. Use the `$> kubectl get nodes` command to display hostname, as illustrated below. In this example, the `k8s-worker-node1` and the `k8s-worker-node2` hostnames must be defined on a storage system.
+  
+  Note: In most cases, the local hostname of the node is the same as the Kubernetes node hostname as displayed in the `kubectl get nodes` command      output. However, if the names are different, make sure to use the Kubernetes node name, as it appears in the command output.
+```bash
+root@k8s-user-v18-master:~# kubectl get nodes
+NAME               STATUS   ROLES      AGE       VERSION
+k8s-master         Ready     master    34d       v1.8.4
+k8s-worker-node1   Ready     <none>    34d       v1.8.4
+k8s-worker-node2   Ready     <none>    34d       v1.8.4
+```
+ * After the node hostnames are defined, log into Spectrum Connect UI and refresh the relevant storage systems in the Storage System pane.
+ * For iSCSI, perform these three steps.
+   * Make sure that the login used to log in to the iSCSI targets is permanent and remains available after a reboot of the worker node. To do this, verify that the `node.startup` in the `/etc/iscsi/iscsid.conf` file is set to `automatic`. If not, set it as required and then restart the `iscsid` service (`$> service iscsid restart`).
+   * Discover and log into at least two iSCSI targets on the relevant storage systems.
+   ```bash
+    $> iscsiadm -m discoverydb -t st -p ${storage system iSCSI port IP}:3260
+    --discover
+    $> iscsiadm -m node  -p ${storage system iSCSI port IP/hostname} --login
+    ```
+    * Verify that the login was successful and display all targets that you logged in. The `portal` value must be the iSCSI target IP address.
+    ```bash
+    $> iscsiadm -m session --rescan
+    Rescanning session [sid: 1, target: {storage system IQN},
+    portal: {storage system iSCSI port IP},{port number}
+    ```
 ## Resources Required
 * Describes Minimum System Resources Required
 
@@ -63,7 +124,7 @@ The command removes all the Kubernetes components associated with the chart and 
 
 ## Configuration
 
-The following tables lists the configurable parameters of the <Ubiquity> chart and their default values.
+The following table lists the configurable parameters of the <Ubiquity> chart and their default values.
 
 | Parameter                  | Description                                     | Default                                                    |
 | -----------------------    | ---------------------------------------------   | ---------------------------------------------------------- |
